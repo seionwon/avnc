@@ -322,6 +322,69 @@
 
 
                     <!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~-->
+                    <!-- macOS Display                                              -->
+                    <!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~-->
+
+                    <TextView
+                        android:id="@+id/apple_display_mode_label"
+                        style="@style/FormField.LabelWithIcon"
+                        android:labelFor="@id/apple_display_mode"
+                        android:text="@string/title_apple_display_mode"
+                        app:drawableStartCompat="@drawable/ic_displays"
+                        app:layout_constraintBottom_toBottomOf="@id/apple_display_mode"
+                        app:layout_constraintStart_toStartOf="parent"
+                        app:layout_constraintTop_toTopOf="@id/apple_display_mode" />
+
+                    <com.gaurav.avnc.util.SpinnerEx
+                        android:id="@+id/apple_display_mode"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:minHeight="@dimen/action_btn_size"
+                        app:layout_constraintEnd_toStartOf="@id/apple_display_help_btn"
+                        app:layout_constraintStart_toStartOf="@id/screen_orientation"
+                        app:layout_constraintTop_toBottomOf="@id/screen_orientation"
+                        app:value="@={viewModel.profile.appleDisplayMode}"
+                        app:valueDescriptions="@{ @stringArray/profile_editor_apple_display_mode_descriptions }"
+                        app:valueLabels="@{ @stringArray/profile_editor_apple_display_mode_labels }"
+                        app:values="@{ @stringArray/profile_editor_apple_display_mode_values }"
+                        tools:entries="@array/dummy_array" />
+
+                    <ImageButton
+                        android:id="@+id/apple_display_help_btn"
+                        style="@style/ImageButton"
+                        android:contentDescription="@string/desc_help_btn"
+                        android:src="@drawable/ic_help"
+                        app:layout_constraintBottom_toBottomOf="@id/apple_display_mode"
+                        app:layout_constraintEnd_toEndOf="parent"
+                        app:layout_constraintTop_toTopOf="@id/apple_display_mode"
+                        app:tint="?colorControlNormal" />
+
+                    <TextView
+                        android:id="@+id/apple_initial_display_label"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="48dp"
+                        android:labelFor="@id/apple_initial_display"
+                        android:text="@string/title_apple_initial_display"
+                        app:layout_constraintBottom_toBottomOf="@id/apple_initial_display"
+                        app:layout_constraintStart_toStartOf="parent"
+                        app:layout_constraintTop_toTopOf="@id/apple_initial_display" />
+
+                    <com.gaurav.avnc.util.SpinnerEx
+                        android:id="@+id/apple_initial_display"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:minHeight="@dimen/action_btn_size"
+                        app:layout_constraintEnd_toEndOf="parent"
+                        app:layout_constraintStart_toStartOf="@id/screen_orientation"
+                        app:layout_constraintTop_toBottomOf="@id/apple_display_mode"
+                        app:value="@={viewModel.profile.appleInitialDisplay}"
+                        app:valueLabels="@{ @stringArray/profile_editor_apple_initial_display_labels }"
+                        app:values="@{ @stringArray/profile_editor_apple_initial_display_values }"
+                        tools:entries="@array/dummy_array" />
+
+
+                    <!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~-->
                     <!-- Security                                                   -->
                     <!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~-->
 
@@ -341,7 +404,7 @@
                         android:minHeight="@dimen/action_btn_size"
                         app:layout_constraintEnd_toEndOf="parent"
                         app:layout_constraintStart_toStartOf="@id/screen_orientation"
-                        app:layout_constraintTop_toBottomOf="@id/screen_orientation"
+                        app:layout_constraintTop_toBottomOf="@id/apple_initial_display"
                         app:value="@={viewModel.profile.securityType}"
                         app:valueLabels="@{ @stringArray/profile_editor_security_labels }"
                         app:values="@{ @stringArray/profile_editor_security_values }"

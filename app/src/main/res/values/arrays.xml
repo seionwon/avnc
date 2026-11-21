@@ -220,6 +220,39 @@
         <item>30</item>
     </string-array>
 
+    <!--Values for macOS display mode-->
+    <string-array name="profile_editor_apple_display_mode_labels">
+        <item>@string/title_apple_display_standard</item>
+        <item>@string/title_apple_display_virtual_1</item>
+        <item>@string/title_apple_display_virtual_2</item>
+    </string-array>
+    <string-array name="profile_editor_apple_display_mode_descriptions">
+        <item>@string/summary_apple_display_standard</item>
+        <item>@string/summary_apple_display_virtual_1</item>
+        <item>@string/summary_apple_display_virtual_2</item>
+    </string-array>
+    <string-array name="profile_editor_apple_display_mode_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <!--Values for initial display selection on macOS-->
+    <string-array name="profile_editor_apple_initial_display_labels">
+        <item>@string/title_display_all</item>
+        <item>@string/title_display_1</item>
+        <item>@string/title_display_2</item>
+        <item>@string/title_display_3</item>
+        <item>@string/title_display_4</item>
+    </string-array>
+    <string-array name="profile_editor_apple_initial_display_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+    </string-array>
+
 
     <!--Dummy string array used for testing-->
     <string-array name="dummy_array">

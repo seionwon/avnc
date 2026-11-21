@@ -9,10 +9,15 @@
 package com.gaurav.avnc.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.content.pm.ActivityInfo
 import android.graphics.RectF
 import android.media.ToneGenerator
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
@@ -24,6 +29,7 @@ import com.gaurav.avnc.session.RemoteSession
 import com.gaurav.avnc.ui.vnc.FrameScroller
 import com.gaurav.avnc.ui.vnc.FrameState
 import com.gaurav.avnc.ui.vnc.FrameView
+import com.gaurav.avnc.ui.vnc.input.MacKeyboardSync
 import com.gaurav.avnc.util.LiveRequest
 import com.gaurav.avnc.util.Tones
 import com.gaurav.avnc.util.debugCheck
@@ -36,6 +42,9 @@ import com.gaurav.avnc.util.monitor
 import com.gaurav.avnc.util.setClipboardText
 import com.gaurav.avnc.util.trustCertificate
 import com.gaurav.avnc.viewmodel.service.SshClient
+import com.gaurav.avnc.vnc.InputLanguage
+import com.gaurav.avnc.vnc.RemoteDisplayState
+import com.gaurav.avnc.vnc.RemoteKeyboardSource
 import com.gaurav.avnc.vnc.UserCredential
 import com.gaurav.avnc.vnc.VncClient
 import kotlinx.coroutines.Dispatchers
@@ -179,6 +188,31 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
     val videoDisabled get() = (activeViewMode.value == ServerProfile.VIEW_MODE_NO_VIDEO)
 
     /**
+     * Remote displays reported by macOS Screen Sharing (RFB 3.889).
+     */
+    val remoteDisplays = MutableLiveData(RemoteDisplayState())
+
+    /**
+     * Active macOS TIS keyboard input source reported via RFB 3.889 encoding 1109.
+     */
+    val remoteKeyboardSource = MutableLiveData<RemoteKeyboardSource?>(null)
+
+    val isAppleKeyboardSyncSupported get() = client?.isAppleKeyboardSyncSupported == true
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var clipboardRestoreJob: Job? = null
+
+    val macKeyboardSync = MacKeyboardSync(
+            selectSource = { sourceId, clearAfter -> messenger?.selectKeyboardSource(sourceId, clearAfter) },
+            toggleSource = { messenger?.toggleInputSource() },
+            scheduleTimer = { delayMs, action ->
+                val runnable = Runnable { action() }
+                mainHandler.postDelayed(runnable, delayMs)
+                ({ mainHandler.removeCallbacks(runnable) })
+            }
+    )
+
+    /**
      * Used for sending events to remote server.
      */
     var messenger: Messenger? = null
@@ -219,6 +253,8 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
+        clipboardRestoreJob?.cancel()
+        macKeyboardSync.reset()
         session.stop()
     }
 
@@ -347,17 +383,25 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
     }
 
     /**
+     * Whether soft keyboard (IME) is currently visible.
+     */
+    var isImeVisible = false
+
+    /**
      * Resize remote desktop to match with local window size (if requested by user).
      * In portrait mode, safe area is used instead of window to exclude the keyboard.
      */
     fun resizeRemoteDesktop() {
-        if (connected && profile.resizeRemoteDesktop && !videoDisabled)
+        if (connected && profile.resizeRemoteDesktop && !videoDisabled) {
+            if (isAppleKeyboardSyncSupported && isImeVisible)
+                return // Avoid tearing down macOS virtual displays when soft keyboard toggles
             frameState.let {
                 if (it.windowWidth > it.windowHeight)
                     messenger?.setDesktopSize(it.windowWidth.toInt(), it.windowHeight.toInt())
                 else
                     messenger?.setDesktopSize(it.safeArea.width().toInt(), it.safeArea.height().toInt())
             }
+        }
     }
 
     fun setFrameBufferUpdatesPaused(paused: Boolean) {
@@ -366,6 +410,62 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
 
     fun refreshFrameBuffer() {
         messenger?.refreshFrameBuffer()
+    }
+
+    fun selectDisplay(displayId: Long) {
+        if (connected) {
+            messenger?.selectDisplay(displayId)
+        }
+    }
+
+    fun sendTextDiff(backspaces: Int, text: String) {
+        if (connected && (backspaces > 0 || text.isNotEmpty())) {
+            messenger?.sendTextDiff(backspaces, text)
+        }
+    }
+
+    fun sendUnicodeText(text: String) {
+        if (connected && text.isNotEmpty()) {
+            messenger?.sendUnicodeText(text)
+        }
+    }
+
+    fun pasteText(text: String) {
+        if (connected && text.isNotEmpty()) {
+            messenger?.pasteText(text)
+            clipboardRestoreJob?.cancel()
+            clipboardRestoreJob = launchMain {
+                delay(1200L)
+                if (connected) {
+                    messenger?.restoreClipboard()
+                }
+            }
+        }
+    }
+
+    /**
+     * Ensures macOS is on a non-IME keylayout (`com.apple.keylayout.ABC` / `US`) so
+     * Android's on-screen keyboard (both Korean and English) can deliver BMP Unicode
+     * directly via 0x04 without double-IME conflicts or clipboard races.
+     */
+    fun ensureMacNonImeForSoftKeyboard() {
+        if (!connected || !isAppleKeyboardSyncSupported) return
+        val src = remoteKeyboardSource.value
+        if (src != null && src.isInputMethod && !src.secureInput) {
+            macKeyboardSync.requestLanguage(InputLanguage.ENGLISH)
+        }
+    }
+
+    fun detectCurrentAndroidKeyboardLanguage(): InputLanguage? {
+        val imm = app.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return null
+        val subtype = runCatching { imm.currentInputMethodSubtype }.getOrNull() ?: return null
+        @Suppress("DEPRECATION")
+        val tag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            subtype.languageTag.ifBlank { subtype.locale }
+        } else {
+            subtype.locale
+        }
+        return MacKeyboardSync.detectLanguageFromLocaleTag(tag)
     }
 
     /**
@@ -409,7 +509,7 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
         }
     }
 
-    private fun refreshFrameView() {
+    fun refreshFrameView() {
         frameViewRef.get()?.requestRender()
     }
 
@@ -456,6 +556,14 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
                 this@VncViewModel.messenger = messenger
                 state.value = State.Connected
 
+                if (vncClient.isAppleKeyboardSyncSupported) {
+                    // Always place macOS on a non-IME layout (ABC/US) on connect so Android's
+                    // soft keyboard is the single source of truth for Korean & English input:
+                    // ScreensharingAgent delivers both English and Hangul BMP directly via 0x04
+                    // when macOS is not in an Input Method (no double-IME conflict, no ㅁㅠㅊ).
+                    macKeyboardSync.onConnected(InputLanguage.ENGLISH, supportsSelection = true)
+                }
+
                 rememberLoginInfo()
 
                 // Initial clipboard sync, slightly delayed to allow extended clipboard negotiations
@@ -467,7 +575,12 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
         override fun onDisconnected() {
             // Block until main thread is synchronised with disconnected state
             runBlocking(Dispatchers.Main) {
+                clipboardRestoreJob?.cancel()
+                clipboardRestoreJob = null
+                macKeyboardSync.reset()
+                remoteKeyboardSource.value = null
                 state.value = State.Disconnected
+                remoteDisplays.value = RemoteDisplayState()
                 client = null
                 messenger = null
             }
@@ -521,6 +634,7 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
         override fun onFramebufferSizeChanged(width: Int, height: Int) {
             launchMain {
                 frameState.setFramebufferSize(width.toFloat(), height.toFloat())
+                refreshFrameView()
             }
         }
 
@@ -531,6 +645,17 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
         override fun onBell() {
             if (pref.ui.bell) {
                 Tones.notify(ToneGenerator.TONE_PROP_BEEP)
+            }
+        }
+
+        override fun onDisplaysChanged(state: RemoteDisplayState) {
+            remoteDisplays.postValue(state)
+        }
+
+        override fun onKeyboardSourceChanged(source: RemoteKeyboardSource) {
+            launchMain {
+                remoteKeyboardSource.value = source
+                macKeyboardSync.onRemoteSourceChanged(source)
             }
         }
 

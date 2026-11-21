@@ -12,6 +12,7 @@ import android.graphics.PointF
 import com.gaurav.avnc.session.Messenger
 import com.gaurav.avnc.ui.vnc.VncActivity
 import com.gaurav.avnc.viewmodel.VncViewModel
+import com.gaurav.avnc.vnc.InputLanguage
 import com.gaurav.avnc.vnc.PointerButton
 import com.gaurav.avnc.vnc.XKeySym
 
@@ -177,6 +178,67 @@ class Dispatcher(private val activity: VncActivity) {
 
     fun onXKey(keySym: Int, xtCode: Int, isDown: Boolean): Boolean {
         return viewModel.messenger?.sendKey(keySym, xtCode, isDown) ?: false
+    }
+
+    val isAppleKeyboardSyncSupported: Boolean
+        get() = viewModel.isAppleKeyboardSyncSupported
+
+    val shouldPasteAsciiDuringMacIme: Boolean
+        get() {
+            val src = viewModel.remoteKeyboardSource.value
+            return src != null && src.isInputMethod && !src.secureInput
+        }
+
+    /**
+     * When macOS is still in an Input Method (or 1109 hasn't confirmed a keylayout yet),
+     * hold uncommitted Hangul composition locally in Android's IME and only flush committed
+     * text via atomic PasteText (never send rapid BackSpace + Cmd+V per jamo).
+     * Once macOS is on ABC/US (`!isInputMethod`), live atomic 0x04 Unicode diffs work cleanly.
+     */
+    val prefersCommittedTextOnly: Boolean
+        get() {
+            if (!isAppleKeyboardSyncSupported) return false
+            val src = viewModel.remoteKeyboardSource.value
+            if (src?.secureInput == true) return false
+            return src == null || src.isInputMethod
+        }
+
+    fun ensureMacNonImeForSoftKeyboard() {
+        viewModel.ensureMacNonImeForSoftKeyboard()
+    }
+
+    fun onMacLanguageRequest(language: InputLanguage) {
+        viewModel.macKeyboardSync.requestLanguage(language)
+    }
+
+    fun onMacLanguageToggle() {
+        viewModel.macKeyboardSync.toggleLanguage()
+    }
+
+    fun onApplePasteText(text: String) {
+        viewModel.pasteText(text)
+    }
+
+    fun onAppleTextInput(deleting: Int, text: String): Boolean {
+        val remoteSource = viewModel.remoteKeyboardSource.value
+        if (remoteSource != null && remoteSource.isInputMethod && !remoteSource.secureInput) {
+            // Keep macOS on non-IME keylayout (ABC/US) while Android soft keyboard is typing
+            // so subsequent Hangul & English input flows directly via 0x04 without double-IME.
+            viewModel.ensureMacNonImeForSoftKeyboard()
+        }
+
+        if (text.isEmpty()) {
+            if (deleting > 0) viewModel.sendTextDiff(deleting, "")
+            return true
+        }
+
+        if (MacKeyboardSync.shouldUsePasteText(text, remoteSource)) {
+            if (deleting > 0) viewModel.sendTextDiff(deleting, "")
+            viewModel.pasteText(text)
+        } else {
+            viewModel.sendTextDiff(deleting, text)
+        }
+        return true
     }
 
     /**************************************************************************

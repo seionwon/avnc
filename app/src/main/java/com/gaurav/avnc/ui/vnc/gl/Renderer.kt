@@ -45,6 +45,9 @@ class Renderer(val viewModel: VncViewModel) : GLSurfaceView.Renderer {
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         glViewport(0, 0, width, height)
+        if (width > 0 && height > 0) {
+            viewModel.frameState.setViewportSize(width.toFloat(), height.toFloat())
+        }
     }
 
     /**

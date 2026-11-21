@@ -21,6 +21,7 @@ import android.util.Rational
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.WindowManager
+import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
@@ -149,6 +150,8 @@ class VncActivity : AppCompatActivity() {
         if (hasFocus) {
             viewModel.sendClipboardText()
             restoreKeyboard()
+            binding.inputView.onWindowFocusGained()
+            viewModel.refreshFrameView()
         }
     }
 
@@ -328,6 +331,7 @@ class VncActivity : AppCompatActivity() {
         binding.frameView.isVisible = true
         binding.frameView.keepScreenOn = viewModel.pref.viewer.keepScreenOn
         inputHandler.onSessionConnected(this)
+        binding.inputView.onSessionConnected()
         virtualKeys.onConnected()
         SamsungDex.setMetaKeyCapture(this, true)
 
@@ -341,6 +345,7 @@ class VncActivity : AppCompatActivity() {
     private fun onSessionDisconnected() {
         binding.frameView.isVisible = false
         binding.frameView.keepScreenOn = false
+        binding.inputView.onSessionDisconnected()
         inputHandler.onSessionDisconnected()
         SamsungDex.setMetaKeyCapture(this, false)
         autoReconnect()
@@ -430,7 +435,9 @@ class VncActivity : AppCompatActivity() {
     }
 
     fun showKeyboard() {
-        showKeyboard(currentFocus ?: binding.inputView)
+        val target = (currentFocus as? EditText) ?: binding.inputView.also { it.requestFocus() }
+        showKeyboard(target)
+        binding.inputView.onImeVisibilityChanged(true)
         virtualKeys.onKeyboardOpen()
     }
 

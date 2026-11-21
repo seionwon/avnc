@@ -1,10 +1,10 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    id("com.android.application") version "9.2.1"
-    id("org.jetbrains.kotlin.plugin.serialization") version "2.2.20"
-    id("org.jetbrains.kotlin.plugin.parcelize") version "2.2.20"
-    id("com.android.legacy-kapt") version "9.2.1"
+    id("com.android.application")
+    id("org.jetbrains.kotlin.plugin.serialization")
+    id("org.jetbrains.kotlin.plugin.parcelize")
+    id("com.android.legacy-kapt")
 }
 
 android {
@@ -17,8 +17,8 @@ android {
         applicationId = "com.gaurav.avnc"
         minSdk = 21
         targetSdk = 36
-        versionCode = 53
-        versionName = "3.3.1"
+        versionCode = 57
+        versionName = "3.3.5"
 
         javaCompileOptions {
             annotationProcessorOptions {
@@ -36,6 +36,16 @@ android {
                 )
 
                 targets("native-vnc", "vncclient")
+            }
+        }
+
+        // On Apple Silicon macOS without Rosetta, NDK's x86_64 yasm cannot assemble x86/x86_64 libjpeg-turbo SIMD.
+        // Build ARM ABIs (arm64-v8a + armeabi-v7a) cleanly into app/build/outputs/apk/ unless overridden.
+        val isAppleSiliconMac = System.getProperty("os.name").startsWith("Mac", ignoreCase = true) &&
+                System.getProperty("os.arch").equals("aarch64", ignoreCase = true)
+        if (isAppleSiliconMac && !project.hasProperty("avncAllAbis")) {
+            ndk {
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
             }
         }
     }
@@ -94,6 +104,15 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
+    }
+}
+
+val avncDebugApkName = "AVNC-v${android.defaultConfig.versionName}.apk"
+
+// Android Studio/CodeMemo가 보여 주는 기본 디버그 산출물도 앱 이름과 버전 번호로 생성한다.
+androidComponents {
+    onVariants(selector().withBuildType("debug")) { variant ->
+        variant.outputs.forEach { output -> output.outputFileName.set(avncDebugApkName) }
     }
 }
 

@@ -159,6 +159,22 @@ data class ServerProfile(
         var resizeRemoteDesktop: Boolean = false,
 
         /**
+         * macOS Screen Sharing display mode:
+         * 0 = Standard (Physical displays)
+         * 1 = High Performance: 1 Virtual Display
+         * 2 = High Performance: 2 Virtual Displays
+         */
+        @ColumnInfo(defaultValue = "0")
+        var appleDisplayMode: Int = APPLE_DISPLAY_STANDARD,
+
+        /**
+         * Initial display to select when connecting to a multi-display macOS host:
+         * 0 = All displays, 1 = Display 1, 2 = Display 2, ...
+         */
+        @ColumnInfo(defaultValue = "0")
+        var appleInitialDisplay: Int = APPLE_INITIAL_DISPLAY_ALL,
+
+        /**
          * Enable Wake-on-LAN
          */
         var enableWol: Boolean = false,
@@ -203,6 +219,12 @@ data class ServerProfile(
         const val VIEW_MODE_NORMAL = 0
         const val VIEW_MODE_NO_INPUT = 1
         const val VIEW_MODE_NO_VIDEO = 2
+
+        // macOS Screen Sharing display modes
+        const val APPLE_DISPLAY_STANDARD = 0
+        const val APPLE_DISPLAY_VIRTUAL_1 = 1
+        const val APPLE_DISPLAY_VIRTUAL_2 = 2
+        const val APPLE_INITIAL_DISPLAY_ALL = 0
 
         // Flag masks
         // private const val FLAG_LEGACY_KEYSYM = 0x01L

@@ -146,6 +146,9 @@ class RemoteSession(private val observer: Observer) {
     private fun configureClient(vncClient: VncClient, profile: ServerProfile) {
         vncClient.configure(profile.securityType, true  /* Hardcoded to true */,
                             profile.imageQuality, profile.useRawEncoding)
+        vncClient.configureAppleDisplay(profile.appleDisplayMode,
+                                        profile.appleInitialDisplay,
+                                        profile.viewMode == ServerProfile.VIEW_MODE_NO_INPUT)
 
         if (profile.useRepeater)
             vncClient.setupRepeater(profile.idOnRepeater)

@@ -17,8 +17,10 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.RadioButton
 import android.widget.Toast
 import android.widget.ToggleButton
+import com.google.android.material.radiobutton.MaterialRadioButton
 import androidx.annotation.RequiresApi
 import androidx.annotation.StringRes
 import androidx.core.view.GravityCompat
@@ -30,6 +32,7 @@ import androidx.core.view.marginTop
 import androidx.drawerlayout.widget.DrawerLayout
 import com.gaurav.avnc.R
 import com.gaurav.avnc.model.ServerProfile
+import com.gaurav.avnc.vnc.RemoteDisplayState
 
 /**
  *
@@ -86,6 +89,7 @@ class Toolbar(private val activity: VncActivity) {
         setupFlyoutClose()
         setupOpenerButton()
         setupViewModeSelection()
+        setupDisplaySelection()
         setupGestureStyleSelection()
         setupGestureExclusionRect()
         setupDrawerCloseOnScrimSwipe()
@@ -185,6 +189,57 @@ class Toolbar(private val activity: VncActivity) {
         }
     }
 
+    private fun setupDisplaySelection() {
+        val group = binding.displayOptionsGroup
+        viewModel.remoteDisplays.observe(activity) { state ->
+            group.setOnCheckedChangeListener(null)
+            group.removeAllViews()
+
+            if (!state.canSwitchDisplays) {
+                binding.displayOptionsToggle.isChecked = false
+                return@observe
+            }
+
+            fun addDisplayButton(displayId: Long, label: String, toastLabel: String) {
+                val btn = MaterialRadioButton(group.context).apply {
+                    id = View.generateViewId()
+                    text = label
+                    tag = DisplayOption(displayId, toastLabel)
+                }
+                group.addView(btn)
+                if (state.currentDisplayId == displayId) {
+                    group.check(btn.id)
+                }
+            }
+
+            val allLabel = activity.getString(R.string.title_display_all)
+            addDisplayButton(RemoteDisplayState.ALL_DISPLAYS, allLabel, allLabel)
+
+            state.displays.forEach { display ->
+                val shortName = activity.getString(R.string.title_display_numbered, display.index)
+                val fullLabel = if (display.width > 0 && display.height > 0) {
+                    activity.getString(R.string.title_display_numbered_with_size,
+                                       display.index, display.width, display.height)
+                } else {
+                    shortName
+                }
+                addDisplayButton(display.id, fullLabel, shortName)
+            }
+
+            group.setOnCheckedChangeListener { rg, checkedId ->
+                val btn = rg.findViewById<RadioButton>(checkedId) ?: return@setOnCheckedChangeListener
+                val option = btn.tag as? DisplayOption ?: return@setOnCheckedChangeListener
+                if (viewModel.connected && viewModel.remoteDisplays.value?.currentDisplayId != option.displayId) {
+                    viewModel.selectDisplay(option.displayId)
+                    Toast.makeText(activity, option.toastLabel, Toast.LENGTH_SHORT).show()
+                }
+                close()
+            }
+        }
+    }
+
+    private data class DisplayOption(val displayId: Long, val toastLabel: String)
+
     private fun setupGestureStyleSelection() {
         val styleButtonMap = mapOf(
                 "auto" to R.id.gesture_style_auto,
@@ -255,7 +310,8 @@ class Toolbar(private val activity: VncActivity) {
         drawerView.layoutDirection = if (isLeftAligned) View.LAYOUT_DIRECTION_LTR else View.LAYOUT_DIRECTION_RTL
         openerButton.layoutDirection = drawerView.layoutDirection
 
-        // Let the gesture group have natural layout as it contains text elements
+        // Let text-bearing flyout groups have natural layout direction
+        binding.displayOptionsGroup.layoutDirection = layoutDirection
         binding.gestureStyleGroup.layoutDirection = layoutDirection
     }
 
@@ -299,6 +355,7 @@ class Toolbar(private val activity: VncActivity) {
 
     private fun setupFlyouts() {
         flyouts += binding.viewModesToggle to binding.viewModeGroup
+        flyouts += binding.displayOptionsToggle to binding.displayOptionsGroup
         flyouts += binding.gestureStyleToggle to binding.gestureStyleGroup
         flyouts += binding.zoomOptionsToggle to binding.zoomOptionsGroup
 

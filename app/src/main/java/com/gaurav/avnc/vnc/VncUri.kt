@@ -52,6 +52,8 @@ class VncUri(str: String) {
     val channelType = uri.getQueryParameter("ChannelType")?.toIntOrNull()
     val colorLevel = uri.getQueryParameter("ColorLevel")?.toIntOrNull()
     val viewOnly = uri.getQueryParameter("ViewOnly")?.let { uri.getBooleanQueryParameter("ViewOnly", false) }
+    val appleDisplayMode = uri.getQueryParameter("AppleDisplayMode")?.toIntOrNull()
+    val appleInitialDisplay = uri.getQueryParameter("AppleInitialDisplay")?.toIntOrNull()
 
     val sshHost = uri.getQueryParameter("SshHost") ?: host
     val sshPort = uri.getQueryParameter("SshPort")?.toIntOrNull()
@@ -72,6 +74,8 @@ class VncUri(str: String) {
         channelType?.let { profile.channelType = it }
         colorLevel?.let { profile.colorLevel = it }
         viewOnly?.let { profile.viewMode = if (it) ServerProfile.VIEW_MODE_NO_INPUT else ServerProfile.VIEW_MODE_NORMAL }
+        appleDisplayMode?.let { profile.appleDisplayMode = it.coerceIn(0, 2) }
+        appleInitialDisplay?.let { profile.appleInitialDisplay = it.coerceIn(0, 4) }
         sshHost?.let { profile.sshHost = it }
         sshPort?.let { profile.sshPort = it }
         sshUsername?.let { profile.sshUsername = it }

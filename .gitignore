@@ -39,3 +39,9 @@ gastest.o
 
 #Private data
 private/
+
+# CodeMemo local build logs & design metadata
+.codememo-build/
+.codememo-design/
+# CodeMemo (대화 첨부 · 빌드 요청 스풀) — git 에 담지 않는다
+.cc-uploads/

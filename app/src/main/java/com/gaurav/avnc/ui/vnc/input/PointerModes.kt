@@ -49,9 +49,11 @@ abstract class BasePointerMode(val viewModel: VncViewModel) {
     open fun doClick(button: PointerButton, p: PointF) {
         doButtonDown(button, p)
         // Some apps (mostly games) seems to ignore click event if button-up is received too early
-        if ((button == PointerButton.Left || button == PointerButton.Middle || button == PointerButton.Right)
-            && viewModel.profile.fButtonUpDelay)
+        val isPrimaryButton = (button == PointerButton.Left || button == PointerButton.Middle || button == PointerButton.Right)
+        if (isPrimaryButton && viewModel.profile.fButtonUpDelay)
             viewModel.messenger?.insertButtonUpDelay()
+        else if (isPrimaryButton && viewModel.isAppleKeyboardSyncSupported)
+            viewModel.messenger?.insertAppleClickHoldDelay()
         doButtonUp(button, p)
     }
 

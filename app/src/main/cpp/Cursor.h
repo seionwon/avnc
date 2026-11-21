@@ -98,6 +98,34 @@ void updateCursor(Cursor *cursor, const uint8_t *buffer, const uint8_t *mask, co
 }
 
 /**
+ * Updates a cursor directly from BGRA pixel data with an 8-bit alpha channel.
+ */
+void updateCursorBGRA(Cursor *cursor, const uint8_t *bgra, const uint16_t width,
+                      const uint16_t height, const uint16_t xHot, const uint16_t yHot) {
+    free(cursor->buffer);
+    cursor->buffer = nullptr;
+
+    if (!bgra || width == 0 || height == 0) {
+        cursor->width = 0;
+        cursor->height = 0;
+        cursor->xHot = 0;
+        cursor->yHot = 0;
+        return;
+    }
+
+    const size_t bufferSize = (size_t) width * height * PixelBytes;
+    cursor->buffer = (uint8_t *) malloc(bufferSize);
+    if (!cursor->buffer)
+        return;
+
+    memcpy(cursor->buffer, bgra, bufferSize);
+    cursor->width = width;
+    cursor->height = height;
+    cursor->xHot = xHot;
+    cursor->yHot = yHot;
+}
+
+/**
  * Creates a new Cursor, initialized with default info.
  */
 Cursor *newCursor() {

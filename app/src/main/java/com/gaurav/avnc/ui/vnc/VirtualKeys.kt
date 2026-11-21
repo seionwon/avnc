@@ -312,10 +312,17 @@ class VirtualKeys(private val activity: VncActivity, private val inputHandler: I
 
     private fun handleTextBoxAction(textBox: EditText) {
         val text = textBox.text?.ifEmpty { "\n" }?.toString() ?: return
-        val events = keyCharMap.getEvents(text.toCharArray())
 
         // Release Meta keys to avoid interference with these key events
         releaseMetaKeys()
+
+        if (inputHandler.isAppleSession && text != "\n") {
+            inputHandler.onTextInput(0, text)
+            textBox.setText("")
+            return
+        }
+
+        val events = keyCharMap.getEvents(text.toCharArray())
 
         // These events are sent to KeyHandler.onKeyEvent() instead of onVkKeyEvent()
         // to treat these like normal system key events.

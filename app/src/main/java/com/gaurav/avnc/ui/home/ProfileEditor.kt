@@ -188,6 +188,7 @@ class AdvancedProfileEditor : Fragment() {
         //setupHelpButton(binding.keyCompatModeHelpBtn, R.string.title_key_compat_mode, R.string.msg_key_compat_mode_help)
         setupHelpButton(binding.buttonUpDelayHelpBtn, R.string.title_button_up_delay, R.string.msg_button_up_delay_help)
         setupHelpButton(binding.wolHelpBtn, R.string.title_enable_wol, R.string.msg_wake_on_lan_help)
+        setupHelpButton(binding.appleDisplayHelpBtn, R.string.title_apple_display_mode, R.string.msg_apple_display_mode_help)
         setupNightModeNavBarColor()
         setupToolbarMenu()
 

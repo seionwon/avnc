@@ -64,6 +64,7 @@ class LayoutManager(private val activity: VncActivity) {
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { v, insets ->
             updateWindowInsets(insets)
             updateNavigationBarVisibility(insets)
+            applyInsets()
             ViewCompat.onApplyWindowInsets(v, insets)
         }
     }
@@ -78,6 +79,7 @@ class LayoutManager(private val activity: VncActivity) {
                 manuallyGenerateWindowInsets()
 
             applyInsets()
+            viewModel.refreshFrameView()
             viewModel.resizeRemoteDesktop()
         }
     }
@@ -237,8 +239,12 @@ class LayoutManager(private val activity: VncActivity) {
     }
 
     private fun applyOpaqueInsets(opaqueInsets: Insets) {
+        val imeVisible = windowInsets.isVisible(Type.ime())
+        viewModel.isImeVisible = imeVisible
+        activity.binding.inputView.onImeVisibilityChanged(imeVisible)
+
         // Guess if IME is closing
-        if (!windowInsets.isVisible(Type.ime()) && rootView.paddingBottom != 0)
+        if (!imeVisible && rootView.paddingBottom != 0)
             activity.virtualKeys.onKeyboardClose()
 
         val insets = windowInsetsToViewInsets(opaqueInsets, rootView)

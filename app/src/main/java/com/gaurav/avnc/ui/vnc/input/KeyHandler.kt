@@ -108,6 +108,23 @@ class KeyHandler(private val dispatcher: Dispatcher, prefs: AppPreferences) {
         return onKeyEvent(event)
     }
 
+    /**
+     * Handles soft-keyboard IME text diffs on standard (non-Apple) VNC servers.
+     */
+    fun onTextInput(deleting: Int, text: String): Boolean {
+        var sent = false
+        repeat(deleting) {
+            if (emit(XKeySym.XK_BackSpace, true) && emit(XKeySym.XK_BackSpace, false))
+                sent = true
+        }
+        if (text.isNotEmpty()) {
+            @Suppress("DEPRECATION")
+            if (onKeyEvent(KeyEvent(0L, text, KeyCharacterMap.VIRTUAL_KEYBOARD, 0)))
+                sent = true
+        }
+        return sent
+    }
+
     /************************************************************************************
      * Event Handling
      ***********************************************************************************/

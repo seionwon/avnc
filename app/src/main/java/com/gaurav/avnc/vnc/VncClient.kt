@@ -52,6 +52,8 @@ class VncClient(private val observer: Observer) {
         fun onFramebufferSizeChanged(width: Int, height: Int)
         fun onPointerMoved(x: Int, y: Int)
         fun onBell()
+        fun onDisplaysChanged(state: RemoteDisplayState) {}
+        fun onKeyboardSourceChanged(source: RemoteKeyboardSource) {}
     }
 
     /**
@@ -67,6 +69,10 @@ class VncClient(private val observer: Observer) {
 
     @Volatile
     var connected = false
+        private set
+
+    @Volatile
+    var isAppleKeyboardSyncSupported = false
         private set
 
     private var destroyed = false
@@ -133,6 +139,15 @@ class VncClient(private val observer: Observer) {
         }
     }
 
+    fun configureAppleDisplay(displayMode: Int, initialDisplay: Int, viewOnly: Boolean = false) {
+        stateLock.read {
+            if (!connected && !destroyed) {
+                nativeConfigureAppleDisplay(nativePtr, displayMode, initialDisplay)
+                nativeSetViewOnly(nativePtr, viewOnly)
+            }
+        }
+    }
+
     fun setupRepeater(serverId: Int) {
         stateLock.read {
             if (!connected && !destroyed)
@@ -152,8 +167,10 @@ class VncClient(private val observer: Observer) {
                 throw IOException(nativeGetLastErrorStr())
         }
         stateLock.write {
-            if (!destroyed)
+            if (!destroyed) {
                 connected = true
+                isAppleKeyboardSyncSupported = nativeIsAppleKeyboardSyncSupported(nativePtr)
+            }
         }
     }
 
@@ -248,6 +265,43 @@ class VncClient(private val observer: Observer) {
     fun setDesktopSize(width: Int, height: Int) = ifConnected {
         if (width > 0 && height > 0)
             nativeSetDesktopSize(nativePtr, width, height)
+    }
+
+    /**
+     * Select a remote display by ID (or [RemoteDisplayState.ALL_DISPLAYS] to show all displays).
+     * Supported on macOS Screen Sharing servers (RFB 3.889).
+     */
+    fun selectDisplay(displayId: Long) = ifConnected {
+        nativeSelectDisplay(nativePtr, displayId)
+    }
+
+    fun selectKeyboardSource(sourceId: String, clearAfter: Boolean = true) = ifConnectedAndInteractive {
+        nativeSelectKeyboardSource(nativePtr, sourceId, clearAfter)
+    }
+
+    fun toggleInputSource() = ifConnectedAndInteractive {
+        nativeToggleInputSource(nativePtr)
+    }
+
+    fun sendTextDiff(backspaces: Int, text: String) = ifConnectedAndInteractive {
+        if (backspaces > 0 || text.isNotEmpty()) {
+            val bytes = if (text.isNotEmpty()) text.toByteArray(StandardCharsets.UTF_8) else null
+            nativeSendTextDiff(nativePtr, backspaces, bytes)
+        }
+    }
+
+    fun sendUnicodeText(text: String) = ifConnectedAndInteractive {
+        if (text.isNotEmpty())
+            nativeSendUnicodeText(nativePtr, text.toByteArray(StandardCharsets.UTF_8))
+    }
+
+    fun pasteText(text: String) = ifConnectedAndInteractive {
+        if (text.isNotEmpty())
+            nativePasteText(nativePtr, text.toByteArray(StandardCharsets.UTF_8))
+    }
+
+    fun restoreClipboard() = ifConnectedAndInteractive {
+        nativeRestoreClipboard(nativePtr)
     }
 
     fun setInputDisabled(disabled: Boolean) {
@@ -346,6 +400,7 @@ class VncClient(private val observer: Observer) {
 
     private external fun nativeClientCreate(): Long
     private external fun nativeConfigure(clientPtr: Long, securityType: Int, useLocalCursor: Boolean, imageQuality: Int, useRawEncoding: Boolean)
+    private external fun nativeConfigureAppleDisplay(clientPtr: Long, displayMode: Int, initialDisplay: Int)
     private external fun nativeInit(clientPtr: Long, host: String, port: Int): Boolean
     private external fun nativeSetDest(clientPtr: Long, host: String, port: Int)
     private external fun nativeProcessServerMessage(clientPtr: Long): Boolean
@@ -353,7 +408,16 @@ class VncClient(private val observer: Observer) {
     private external fun nativeSendPointerEvent(clientPtr: Long, x: Int, y: Int, mask: Int): Boolean
     private external fun nativeSendCutText(clientPtr: Long, bytes: ByteArray, isUTF8: Boolean): Boolean
     private external fun nativeIsUTF8CutTextSupported(clientPtr: Long): Boolean
+    private external fun nativeIsAppleKeyboardSyncSupported(clientPtr: Long): Boolean
+    private external fun nativeSelectKeyboardSource(clientPtr: Long, sourceId: String, clearAfter: Boolean): Boolean
+    private external fun nativeToggleInputSource(clientPtr: Long): Boolean
+    private external fun nativeSendTextDiff(clientPtr: Long, backspaces: Int, utf8Bytes: ByteArray?): Boolean
+    private external fun nativeSendUnicodeText(clientPtr: Long, utf8Bytes: ByteArray): Boolean
+    private external fun nativePasteText(clientPtr: Long, utf8Bytes: ByteArray): Boolean
+    private external fun nativeRestoreClipboard(clientPtr: Long): Boolean
     private external fun nativeSetDesktopSize(clientPtr: Long, width: Int, height: Int): Boolean
+    private external fun nativeSelectDisplay(clientPtr: Long, displayId: Long): Boolean
+    private external fun nativeSetViewOnly(clientPtr: Long, viewOnly: Boolean)
     private external fun nativeRefreshFrameBuffer(clientPtr: Long): Boolean
     private external fun nativePauseFramebufferUpdates(clientPtr: Long, pause: Boolean)
     private external fun nativeGetDesktopName(clientPtr: Long): String
@@ -410,6 +474,29 @@ class VncClient(private val observer: Observer) {
     private fun cbHandleCursorInfo(width: Int, height: Int, xHot: Int, yHot: Int) {
         cursorInfo = CursorInfo(width, height, xHot, yHot)
         cbFinishedFrameBufferUpdate() // Fake call to trigger rendering
+    }
+
+    @Keep
+    private fun cbDisplaysChanged(currentDisplayId: Long, supportsSelection: Boolean,
+                                  ids: LongArray, widths: IntArray, heights: IntArray, flags: IntArray) {
+        val displays = ids.indices.map { i ->
+            val f = flags[i]
+            RemoteDisplay(
+                    id = ids[i],
+                    index = i + 1,
+                    width = widths[i],
+                    height = heights[i],
+                    isMain = (f and RemoteDisplay.FLAG_MAIN) != 0,
+                    isMirrored = (f and RemoteDisplay.FLAG_MIRRORED) != 0,
+                    isVirtual = (f and RemoteDisplay.FLAG_VIRTUAL) != 0
+            )
+        }
+        observer.onDisplaysChanged(RemoteDisplayState(currentDisplayId, displays, supportsSelection))
+    }
+
+    @Keep
+    private fun cbKeyboardSourceChanged(sourceId: String, secureInput: Boolean, supportsSelection: Boolean) {
+        observer.onKeyboardSourceChanged(RemoteKeyboardSource(sourceId, secureInput, supportsSelection))
     }
 
 

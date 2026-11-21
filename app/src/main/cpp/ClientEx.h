@@ -11,6 +11,7 @@
 
 #include <jni.h>
 #include "Cursor.h"
+#include "AppleRfb.h"
 
 /**
  * We attach some additional data to every rfbClient.
@@ -29,6 +30,18 @@ struct ClientEx {
 
     // Cursor data used for client-side cursor rendering
     Cursor *cursor;
+
+    // Native Apple RFB 3.889 client (active when connected to macOS Screen Sharing)
+    AppleRfbClient *appleClient;
+
+    // Saved connection configuration for Apple RFB 3.889 negotiation
+    int configuredSecurityType;
+    int appleDisplayMode;
+    int appleInitialDisplay;
+    int imageQuality;
+    bool useLocalCursor;
+    bool useRawEncoding;
+    bool viewOnly;
 
     // Protects modification to framebuffer & cursor
     MUTEX(mutex);
@@ -62,10 +75,11 @@ void setManagedClient(rfbClient *client, jobject managedClient) {
  * Create new ClientEx and assign it to given client.
  */
 ClientEx *assignClientExtension(rfbClient *client) {
-    auto ex = (ClientEx *) malloc(sizeof(ClientEx));
+    auto ex = (ClientEx *) calloc(1, sizeof(ClientEx));
     if (ex) {
         INIT_MUTEX(ex->mutex);
         ex->cursor = nullptr;
+        ex->appleClient = nullptr;
         setClientExtension(client, ex);
     }
     return ex;
@@ -77,6 +91,10 @@ ClientEx *assignClientExtension(rfbClient *client) {
 void freeClientExtension(rfbClient *client) {
     auto ex = getClientExtension(client);
     if (ex) {
+        if (ex->appleClient) {
+            appleRfbDestroy(ex->appleClient);
+            ex->appleClient = nullptr;
+        }
         TINI_MUTEX(ex->mutex);
         freeCursor(ex->cursor);
         free(ex);

@@ -84,8 +84,41 @@ class Messenger(private val client: VncClient) {
         return execute { client.sendKeyEvent(keySym, xtCode, isDown) }
     }
 
+    fun selectKeyboardSource(sourceId: String, clearAfter: Boolean = true) {
+        execute { client.selectKeyboardSource(sourceId, clearAfter) }
+    }
+
+    fun toggleInputSource() {
+        execute { client.toggleInputSource() }
+    }
+
+    fun sendTextDiff(backspaces: Int, text: String) {
+        execute { client.sendTextDiff(backspaces, text) }
+    }
+
+    fun sendUnicodeText(text: String) {
+        execute { client.sendUnicodeText(text) }
+    }
+
+    fun pasteText(text: String) {
+        execute {
+            client.pasteText(text)
+            // Give the remote macOS app a short window to consume Cmd+V from
+            // NSPasteboard before any subsequent PasteText overwrites it.
+            runCatching { Thread.sleep(45L) }
+        }
+    }
+
+    fun restoreClipboard() {
+        execute { client.restoreClipboard() }
+    }
+
     fun insertButtonUpDelay() {
         execute { runCatching { Thread.sleep(200) } }
+    }
+
+    fun insertAppleClickHoldDelay() {
+        execute { runCatching { Thread.sleep(25) } }
     }
 
     /**************************************************************************
@@ -98,6 +131,10 @@ class Messenger(private val client: VncClient) {
 
     fun setDesktopSize(width: Int, height: Int) {
         execute { client.setDesktopSize(width, height) }
+    }
+
+    fun selectDisplay(displayId: Long) {
+        execute { client.selectDisplay(displayId) }
     }
 
     fun refreshFrameBuffer() {

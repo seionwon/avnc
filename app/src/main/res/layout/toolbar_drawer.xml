@@ -56,6 +56,13 @@
                     android:drawableStart="@drawable/ic_visibility" />
 
                 <ToggleButton
+                    android:id="@+id/display_options_toggle"
+                    style="@style/ToolbarFlyoutToggle"
+                    android:contentDescription="@string/desc_display_options_toggle"
+                    android:drawableStart="@drawable/ic_displays"
+                    app:isVisible="@{viewModel.remoteDisplays.canSwitchDisplays}" />
+
+                <ToggleButton
                     android:id="@+id/gesture_style_toggle"
                     style="@style/ToolbarFlyoutToggle"
                     android:contentDescription="@string/pref_gesture_style"
@@ -101,6 +108,16 @@
                     android:src="@drawable/ic_save" />
 
             </LinearLayout>
+
+            <RadioGroup
+                android:id="@+id/display_options_group"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_vertical"
+                android:layout_marginHorizontal="@dimen/margin_small"
+                android:background="@drawable/bg_round_rect"
+                android:paddingStart="@dimen/padding_small"
+                android:paddingEnd="@dimen/padding_normal" />
 
             <RadioGroup
                 android:id="@+id/gesture_style_group"

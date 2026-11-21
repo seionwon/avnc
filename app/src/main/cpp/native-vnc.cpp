@@ -9,7 +9,9 @@
 #include <jni.h>
 #include <GLES2/gl2.h>
 #include <rfb/rfbclient.h>
+#include <unistd.h>
 
+#include "AppleRfb.h"
 #include "ClientEx.h"
 #include "Utility.h"
 
@@ -294,6 +296,165 @@ static void setCallbacks(rfbClient *client) {
 
 
 /******************************************************************************
+ * Apple RFB 3.889 Callbacks
+ *****************************************************************************/
+
+static bool appleGetCredential(void *userCtx, char *usernameOut, size_t usernameCap,
+                               char *passwordOut, size_t passwordCap) {
+    auto client = (rfbClient *) userCtx;
+    rfbCredential *cred = onGetCredential(client, rfbCredentialTypeUser);
+    if (!cred) return false;
+
+    const char *user = cred->userCredential.username ? cred->userCredential.username : "";
+    const char *pass = cred->userCredential.password ? cred->userCredential.password : "";
+    snprintf(usernameOut, usernameCap, "%s", user);
+    snprintf(passwordOut, passwordCap, "%s", pass);
+
+    free(cred->userCredential.username);
+    free(cred->userCredential.password);
+    free(cred);
+    return true;
+}
+
+static uint8_t *appleResizeFramebuffer(void *userCtx, int width, int height) {
+    auto client = (rfbClient *) userCtx;
+    client->width = width;
+    client->height = height;
+    if (!onMallocFrameBuffer(client))
+        return nullptr;
+    return client->frameBuffer;
+}
+
+static void appleLockFramebuffer(void *userCtx) {
+    auto ex = getClientExtension((rfbClient *) userCtx);
+    LOCK(ex->mutex);
+}
+
+static void appleUnlockFramebuffer(void *userCtx) {
+    auto ex = getClientExtension((rfbClient *) userCtx);
+    UNLOCK(ex->mutex);
+}
+
+static void appleOnFramebufferUpdated(void *userCtx) {
+    onFinishedFrameBufferUpdate((rfbClient *) userCtx);
+}
+
+static void appleOnCursorShape(void *userCtx, const uint8_t *bgra, uint16_t width, uint16_t height,
+                               uint16_t xHot, uint16_t yHot) {
+    auto client = (rfbClient *) userCtx;
+    auto ex = getClientExtension(client);
+    if (!ex->cursor)
+        return;
+
+    LOCK(ex->mutex);
+    updateCursorBGRA(ex->cursor, bgra, width, height, xHot, yHot);
+    UNLOCK(ex->mutex);
+
+    auto obj = getManagedClient(client);
+    auto env = context.getEnv();
+    auto cls = context.managedCls;
+    jmethodID mid = env->GetMethodID(cls, "cbHandleCursorInfo", "(IIII)V");
+    env->CallVoidMethod(obj, mid, (jint) width, (jint) height, (jint) xHot, (jint) yHot);
+}
+
+static void appleOnCursorPos(void *userCtx, int x, int y) {
+    onHandleCursorPos((rfbClient *) userCtx, x, y);
+}
+
+static void appleOnDisplaysChanged(void *userCtx, const AppleDisplayLayout *layout,
+                                   bool supportsSelection) {
+    auto client = (rfbClient *) userCtx;
+    auto obj = getManagedClient(client);
+    auto env = context.getEnv();
+    auto cls = context.managedCls;
+
+    jint count = (jint) layout->count;
+    jlongArray ids = env->NewLongArray(count);
+    jintArray widths = env->NewIntArray(count);
+    jintArray heights = env->NewIntArray(count);
+    jintArray flags = env->NewIntArray(count);
+    if (!ids || !widths || !heights || !flags) {
+        if (ids) env->DeleteLocalRef(ids);
+        if (widths) env->DeleteLocalRef(widths);
+        if (heights) env->DeleteLocalRef(heights);
+        if (flags) env->DeleteLocalRef(flags);
+        return;
+    }
+
+    jlong idVals[APPLE_MAX_LAYOUT_DISPLAYS];
+    jint wVals[APPLE_MAX_LAYOUT_DISPLAYS];
+    jint hVals[APPLE_MAX_LAYOUT_DISPLAYS];
+    jint flagVals[APPLE_MAX_LAYOUT_DISPLAYS];
+
+    for (jint i = 0; i < count; ++i) {
+        const AppleDisplayInfo &d = layout->displays[i];
+        idVals[i] = (jlong) (uint64_t) d.id;
+        wVals[i] = (jint) (d.logicalWidth > 0 ? d.logicalWidth : d.backingWidth);
+        hVals[i] = (jint) (d.logicalHeight > 0 ? d.logicalHeight : d.backingHeight);
+        flagVals[i] = (jint) d.flags;
+    }
+
+    env->SetLongArrayRegion(ids, 0, count, idVals);
+    env->SetIntArrayRegion(widths, 0, count, wVals);
+    env->SetIntArrayRegion(heights, 0, count, hVals);
+    env->SetIntArrayRegion(flags, 0, count, flagVals);
+
+    jlong currentId = (layout->currentDisplayId == APPLE_ALL_DISPLAYS_WIRE)
+                      ? 0L
+                      : (jlong) (uint64_t) layout->currentDisplayId;
+
+    jmethodID mid = env->GetMethodID(cls, "cbDisplaysChanged", "(JZ[J[I[I[I)V");
+    env->CallVoidMethod(obj, mid, currentId, (jboolean) supportsSelection, ids, widths, heights, flags);
+
+    env->DeleteLocalRef(ids);
+    env->DeleteLocalRef(widths);
+    env->DeleteLocalRef(heights);
+    env->DeleteLocalRef(flags);
+}
+
+static void appleOnKeyboardSourceChanged(void *userCtx, const char *sourceId,
+                                         bool secureInput, bool supportsSelection) {
+    auto client = (rfbClient *) userCtx;
+    auto obj = getManagedClient(client);
+    auto env = context.getEnv();
+    auto cls = context.managedCls;
+
+    jstring jSourceId = env->NewStringUTF(sourceId ? sourceId : "");
+    if (!jSourceId) return;
+
+    jmethodID mid = env->GetMethodID(cls, "cbKeyboardSourceChanged", "(Ljava/lang/String;ZZ)V");
+    env->CallVoidMethod(obj, mid, jSourceId, (jboolean) secureInput, (jboolean) supportsSelection);
+    env->DeleteLocalRef(jSourceId);
+}
+
+static void appleOnCutText(void *userCtx, const char *text, int len, bool isUtf8) {
+    onGotXCutText((rfbClient *) userCtx, text, len, isUtf8);
+}
+
+static void appleOnBell(void *userCtx) {
+    onBell((rfbClient *) userCtx);
+}
+
+static AppleRfbCallbacks makeAppleCallbacks() {
+    AppleRfbCallbacks cbs{};
+    cbs.getCredential = appleGetCredential;
+    cbs.resizeFramebuffer = appleResizeFramebuffer;
+    cbs.lockFramebuffer = appleLockFramebuffer;
+    cbs.unlockFramebuffer = appleUnlockFramebuffer;
+    cbs.onFramebufferUpdated = appleOnFramebufferUpdated;
+    cbs.onCursorShape = appleOnCursorShape;
+    cbs.onCursorPos = appleOnCursorPos;
+    cbs.onDisplaysChanged = appleOnDisplaysChanged;
+    cbs.onKeyboardSourceChanged = appleOnKeyboardSourceChanged;
+    cbs.onCutText = appleOnCutText;
+    cbs.onBell = appleOnBell;
+    cbs.logInfo = log_info;
+    cbs.logError = log_error;
+    return cbs;
+}
+
+
+/******************************************************************************
  * Native method Implementation
  *****************************************************************************/
 
@@ -324,6 +485,12 @@ Java_com_gaurav_avnc_vnc_VncClient_nativeConfigure(JNIEnv * /*env*/, jobject /*t
                                                    jint securityType, jboolean use_local_cursor, jint image_quality,
                                                    jboolean use_raw_encoding) {
     auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
+
+    ex->configuredSecurityType = securityType;
+    ex->useLocalCursor = (use_local_cursor == JNI_TRUE);
+    ex->imageQuality = image_quality;
+    ex->useRawEncoding = (use_raw_encoding == JNI_TRUE);
 
     // 0 means all auth types
     if (securityType != 0) {
@@ -333,7 +500,7 @@ Java_com_gaurav_avnc_vnc_VncClient_nativeConfigure(JNIEnv * /*env*/, jobject /*t
 
     if (use_local_cursor) {
         client->appData.useRemoteCursor = TRUE;
-        getClientExtension(client)->cursor = newCursor();
+        ex->cursor = newCursor();
     }
 
     client->appData.qualityLevel = image_quality;
@@ -354,6 +521,16 @@ Java_com_gaurav_avnc_vnc_VncClient_nativeConfigure(JNIEnv * /*env*/, jobject /*t
 
 extern "C"
 JNIEXPORT void JNICALL
+Java_com_gaurav_avnc_vnc_VncClient_nativeConfigureAppleDisplay(JNIEnv * /*env*/, jobject /*thiz*/,
+                                                               jlong client_ptr, jint display_mode,
+                                                               jint initial_display) {
+    auto ex = getClientExtension((rfbClient *) client_ptr);
+    ex->appleDisplayMode = display_mode;
+    ex->appleInitialDisplay = initial_display;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeSetDest(JNIEnv *env, jobject /*thiz*/, jlong client_ptr,
                                                  jstring host, jint port) {
     auto client = (rfbClient *) client_ptr;
@@ -366,11 +543,60 @@ JNIEXPORT jboolean JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeInit(JNIEnv *env, jobject /*thiz*/, jlong client_ptr,
                                               jstring host, jint port) {
     auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
 
     client->serverHost = getNativeStrCopy(env, host);
     client->serverPort = port < 100 ? port + 5900 : port;
 
-    if (rfbClientConnect(client) && rfbClientInitialise(client)) {
+    if (!rfbClientConnect(client)) {
+        return JNI_FALSE;
+    }
+
+    // Detect macOS Screen Sharing (RFB 003.889 / 003.888) via MSG_PEEK without
+    // consuming bytes, so non-Apple VNC servers proceed on the exact same socket.
+    bool allowApple = !client->destHost &&
+                      (ex->configuredSecurityType == 0 || ex->configuredSecurityType == 30);
+    if (allowApple && appleRfbPeekIsAppleBanner(client->sock, 5000) == 1) {
+        AppleRfbConfig cfg{};
+        cfg.securityType = ex->configuredSecurityType;
+        cfg.imageQuality = ex->imageQuality;
+        cfg.useRawEncoding = ex->useRawEncoding;
+        cfg.useLocalCursor = ex->useLocalCursor;
+        cfg.viewOnly = ex->viewOnly;
+        cfg.displayMode = (AppleDisplayMode) ex->appleDisplayMode;
+        cfg.initialDisplayIndex = ex->appleInitialDisplay;
+        cfg.virtualWidth = 1920;
+        cfg.virtualHeight = 1080;
+        cfg.virtualDensity = 1.0;
+
+        AppleRfbCallbacks cbs = makeAppleCallbacks();
+        AppleRfbClient *appleClient = nullptr;
+        int err = 0;
+        AppleRfbConnectResult res = appleRfbConnect(client->sock, &cfg, &cbs, client, &appleClient, &err);
+
+        if (res == APPLE_RFB_OK) {
+            ex->appleClient = appleClient;
+            client->serverMajor = 3;
+            client->serverMinor = 889;
+            return JNI_TRUE;
+        }
+        if (res == APPLE_RFB_ERROR) {
+            errno = err;
+            return JNI_FALSE;
+        }
+
+        // APPLE_RFB_FALLBACK: e.g. server only offered VncAuth (type 2).
+        // Reconnect cleanly and hand off to standard LibVNCClient.
+        if (client->sock != RFB_INVALID_SOCKET) {
+            close(client->sock);
+            client->sock = RFB_INVALID_SOCKET;
+        }
+        if (!rfbClientConnect(client)) {
+            return JNI_FALSE;
+        }
+    }
+
+    if (rfbClientInitialise(client)) {
         return JNI_TRUE;
     }
 
@@ -400,6 +626,16 @@ JNIEXPORT jboolean JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeProcessServerMessage(JNIEnv * /*env*/, jobject /*thiz*/,
                                                               jlong client_ptr) {
     auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
+
+    if (ex->appleClient) {
+        auto waitResult = appleRfbWaitForMessage(ex->appleClient, 250000);
+        if (waitResult == 0)
+            return JNI_TRUE;
+        if (waitResult > 0 && appleRfbHandleServerMessage(ex->appleClient))
+            return JNI_TRUE;
+        return JNI_FALSE;
+    }
 
     auto waitResult = WaitForMessage(client, 1000000);
 
@@ -424,6 +660,7 @@ JNIEXPORT jboolean JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeSendKeyEvent(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr,
                                                       jint key_sym, jint xt_code, jboolean is_down) {
     auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
     rfbBool down = is_down ? TRUE : FALSE;
 
     // Remap Alt key to Meta key for MacOS
@@ -431,6 +668,10 @@ Java_com_gaurav_avnc_vnc_VncClient_nativeSendKeyEvent(JNIEnv * /*env*/, jobject 
     if (isServerMacOS) {
         if (key_sym == 0xffe9  /* Left alt  */) key_sym = 0xffe7  /* Left meta  */;
         if (key_sym == 0xffea  /* Right alt */) key_sym = 0xffe8  /* Right meta */;
+    }
+
+    if (ex->appleClient) {
+        return appleRfbSendKeyEvent(ex->appleClient, (uint32_t) key_sym, is_down == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
     }
 
     if (xt_code > 0 && SendExtendedKeyEvent(client, key_sym, xt_code, down))
@@ -443,7 +684,12 @@ extern "C"
 JNIEXPORT jboolean JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeSendPointerEvent(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr,
                                                           jint x, jint y, jint mask) {
-    return (jboolean) SendPointerEvent((rfbClient *) client_ptr, x, y, mask);
+    auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
+    if (ex->appleClient) {
+        return appleRfbSendPointerEvent(ex->appleClient, x, y, (uint8_t) mask) ? JNI_TRUE : JNI_FALSE;
+    }
+    return (jboolean) SendPointerEvent(client, x, y, mask);
 }
 
 extern "C"
@@ -451,13 +697,19 @@ JNIEXPORT jboolean JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeSendCutText(JNIEnv *env, jobject /*thiz*/, jlong client_ptr, jbyteArray bytes,
                                                      jboolean is_utf8) {
     auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
     auto textBuffer = env->GetByteArrayElements(bytes, nullptr);
     auto textLen = env->GetArrayLength(bytes);
     auto textChars = reinterpret_cast<char *>(textBuffer);
 
-    rfbBool result = is_utf8
-                     ? SendClientCutTextUTF8(client, textChars, textLen)
-                     : SendClientCutText(client, textChars, textLen);
+    rfbBool result = FALSE;
+    if (ex->appleClient) {
+        result = appleRfbSendCutText(ex->appleClient, textChars, textLen, is_utf8 == JNI_TRUE) ? TRUE : FALSE;
+    } else {
+        result = is_utf8
+                 ? SendClientCutTextUTF8(client, textChars, textLen)
+                 : SendClientCutText(client, textChars, textLen);
+    }
 
     env->ReleaseByteArrayElements(bytes, textBuffer, JNI_ABORT);
     return (jboolean) result;
@@ -466,20 +718,137 @@ Java_com_gaurav_avnc_vnc_VncClient_nativeSendCutText(JNIEnv *env, jobject /*thiz
 extern "C"
 JNIEXPORT jboolean JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeIsUTF8CutTextSupported(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr) {
-    return (jboolean) (((rfbClient *) client_ptr)->extendedClipboardServerCapabilities != 0);
+    auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
+    if (ex->appleClient) {
+        return appleRfbSupportsUtf8Pasteboard(ex->appleClient) ? JNI_TRUE : JNI_FALSE;
+    }
+    return (jboolean) (client->extendedClipboardServerCapabilities != 0);
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_gaurav_avnc_vnc_VncClient_nativeIsAppleKeyboardSyncSupported(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr) {
+    auto ex = getClientExtension((rfbClient *) client_ptr);
+    if (!ex->appleClient) return JNI_FALSE;
+    return appleRfbSupportsKeyboardSync(ex->appleClient) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_gaurav_avnc_vnc_VncClient_nativeSelectKeyboardSource(JNIEnv *env, jobject /*thiz*/,
+                                                              jlong client_ptr, jstring source_id,
+                                                              jboolean clear_after) {
+    auto ex = getClientExtension((rfbClient *) client_ptr);
+    if (!ex->appleClient || !source_id) return JNI_FALSE;
+    auto idStr = env->GetStringUTFChars(source_id, nullptr);
+    if (!idStr) return JNI_FALSE;
+    bool ok = appleRfbSelectKeyboardSource(ex->appleClient, idStr, clear_after == JNI_TRUE);
+    env->ReleaseStringUTFChars(source_id, idStr);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_gaurav_avnc_vnc_VncClient_nativeToggleInputSource(JNIEnv * /*env*/, jobject /*thiz*/,
+                                                           jlong client_ptr) {
+    auto ex = getClientExtension((rfbClient *) client_ptr);
+    if (!ex->appleClient) return JNI_FALSE;
+    return appleRfbToggleInputSource(ex->appleClient) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_gaurav_avnc_vnc_VncClient_nativeSendTextDiff(JNIEnv *env, jobject /*thiz*/,
+                                                      jlong client_ptr, jint backspaces,
+                                                      jbyteArray utf8_bytes) {
+    auto ex = getClientExtension((rfbClient *) client_ptr);
+    if (!ex->appleClient) return JNI_FALSE;
+    if (!utf8_bytes) {
+        return appleRfbSendTextDiff(ex->appleClient, backspaces, nullptr, 0) ? JNI_TRUE : JNI_FALSE;
+    }
+    auto buf = env->GetByteArrayElements(utf8_bytes, nullptr);
+    auto len = env->GetArrayLength(utf8_bytes);
+    bool ok = appleRfbSendTextDiff(ex->appleClient, backspaces, reinterpret_cast<const char *>(buf), len);
+    env->ReleaseByteArrayElements(utf8_bytes, buf, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_gaurav_avnc_vnc_VncClient_nativeSendUnicodeText(JNIEnv *env, jobject /*thiz*/,
+                                                         jlong client_ptr, jbyteArray utf8_bytes) {
+    auto ex = getClientExtension((rfbClient *) client_ptr);
+    if (!ex->appleClient || !utf8_bytes) return JNI_FALSE;
+    auto buf = env->GetByteArrayElements(utf8_bytes, nullptr);
+    auto len = env->GetArrayLength(utf8_bytes);
+    bool ok = appleRfbSendUnicodeText(ex->appleClient, reinterpret_cast<const char *>(buf), len);
+    env->ReleaseByteArrayElements(utf8_bytes, buf, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_gaurav_avnc_vnc_VncClient_nativePasteText(JNIEnv *env, jobject /*thiz*/,
+                                                   jlong client_ptr, jbyteArray utf8_bytes) {
+    auto ex = getClientExtension((rfbClient *) client_ptr);
+    if (!ex->appleClient || !utf8_bytes) return JNI_FALSE;
+    auto buf = env->GetByteArrayElements(utf8_bytes, nullptr);
+    auto len = env->GetArrayLength(utf8_bytes);
+    bool ok = appleRfbPasteText(ex->appleClient, reinterpret_cast<const char *>(buf), len);
+    env->ReleaseByteArrayElements(utf8_bytes, buf, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_gaurav_avnc_vnc_VncClient_nativeRestoreClipboard(JNIEnv * /*env*/, jobject /*thiz*/,
+                                                          jlong client_ptr) {
+    auto ex = getClientExtension((rfbClient *) client_ptr);
+    if (!ex->appleClient) return JNI_FALSE;
+    return appleRfbRestoreClipboard(ex->appleClient) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C"
 JNIEXPORT jboolean JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeSetDesktopSize(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr,
                                                         jint width, jint height) {
-    return (jboolean) SendExtDesktopSize((rfbClient *) client_ptr, width, height);
+    auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
+    if (ex->appleClient) {
+        return appleRfbSetDesktopSize(ex->appleClient, width, height) ? JNI_TRUE : JNI_FALSE;
+    }
+    return (jboolean) SendExtDesktopSize(client, width, height);
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_gaurav_avnc_vnc_VncClient_nativeSelectDisplay(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr,
+                                                       jlong display_id) {
+    auto ex = getClientExtension((rfbClient *) client_ptr);
+    if (!ex->appleClient) return JNI_FALSE;
+    return appleRfbSelectDisplay(ex->appleClient, (uint32_t) display_id) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_gaurav_avnc_vnc_VncClient_nativeSetViewOnly(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr,
+                                                     jboolean view_only) {
+    auto ex = getClientExtension((rfbClient *) client_ptr);
+    ex->viewOnly = (view_only == JNI_TRUE);
+    if (ex->appleClient) {
+        appleRfbSetViewOnly(ex->appleClient, ex->viewOnly);
+    }
 }
 
 extern "C"
 JNIEXPORT jboolean JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeRefreshFrameBuffer(JNIEnv * /*env*/, jobject /*thiz*/, jlong clientPtr) {
     auto client = (rfbClient *) clientPtr;
+    auto ex = getClientExtension(client);
+    if (ex->appleClient) {
+        return appleRfbRefreshFramebuffer(ex->appleClient) ? JNI_TRUE : JNI_FALSE;
+    }
     return (jboolean) SendFramebufferUpdateRequest(client, 0, 0, client->width, client->height, TRUE);
 }
 
@@ -487,32 +856,52 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativePauseFramebufferUpdates(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr,
                                                                  jboolean pause) {
-    ((rfbClient *) client_ptr)->pauseFramebufferUpdates = pause;
+    auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
+    client->pauseFramebufferUpdates = pause;
+    if (ex->appleClient) {
+        appleRfbSetPaused(ex->appleClient, pause == JNI_TRUE);
+    }
 }
 
 extern "C"
 JNIEXPORT jstring JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeGetDesktopName(JNIEnv *env, jobject /*thiz*/, jlong client_ptr) {
     auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
+    if (ex->appleClient) {
+        return env->NewStringUTF(appleRfbGetDesktopName(ex->appleClient));
+    }
     return env->NewStringUTF(client->desktopName ? client->desktopName : "");
 }
 
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeGetWidth(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr) {
-    return ((rfbClient *) client_ptr)->width;
+    auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
+    if (ex->appleClient) return appleRfbGetWidth(ex->appleClient);
+    return client->width;
 }
 
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeGetHeight(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr) {
-    return ((rfbClient *) client_ptr)->height;
+    auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
+    if (ex->appleClient) return appleRfbGetHeight(ex->appleClient);
+    return client->height;
 }
 
 extern "C"
 JNIEXPORT jboolean JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeIsEncrypted(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr) {
-    return static_cast<jboolean>(((rfbClient *) client_ptr)->tlsSession ? JNI_TRUE : JNI_FALSE);
+    auto client = (rfbClient *) client_ptr;
+    auto ex = getClientExtension(client);
+    if (ex->appleClient) {
+        return appleRfbIsEncrypted(ex->appleClient) ? JNI_TRUE : JNI_FALSE;
+    }
+    return static_cast<jboolean>(client->tlsSession ? JNI_TRUE : JNI_FALSE);
 }
 
 extern "C"

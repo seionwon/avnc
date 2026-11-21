@@ -66,11 +66,19 @@ include_directories(${AVNC_LIBVNC_SRC_DIR}/include ${AVNC_LIBVNC_BUILD_DIR}/incl
 # It contains implementation of JNI native methods, some NDK scaffolding and
 # some helpers for OpenGL ES rendering. This is the library loaded from Java.
 ###############################################################################
-set(AVNC_NATIVE_SOURCE src/main/cpp/native-vnc.cpp)
+set(AVNC_NATIVE_SOURCE
+    src/main/cpp/native-vnc.cpp
+    src/main/cpp/AppleRfb.cpp
+)
 
 add_library(native-vnc SHARED ${AVNC_NATIVE_SOURCE})
 
 target_link_libraries(native-vnc vncclient)
+
+find_package(OpenSSL REQUIRED)
+find_package(ZLIB REQUIRED)
+target_include_directories(native-vnc PRIVATE ${OPENSSL_INCLUDE_DIR} ${ZLIB_INCLUDE_DIR})
+target_link_libraries(native-vnc ${OPENSSL_LIBRARIES} ${ZLIB_LIBRARIES})
 
 
 # Link NDK libraries
