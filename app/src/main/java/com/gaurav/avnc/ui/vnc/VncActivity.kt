@@ -20,8 +20,8 @@ import android.util.Log
 import android.util.Rational
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
-import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
@@ -37,10 +37,12 @@ import com.gaurav.avnc.databinding.NoVideoOverlayBinding
 import com.gaurav.avnc.databinding.ViewerHelpBinding
 import com.gaurav.avnc.ui.vnc.input.InputHandler
 import com.gaurav.avnc.util.DeviceAuthPrompt
+import com.gaurav.avnc.util.ConfirmDialog
 import com.gaurav.avnc.util.EdgeToEdgeHelper
 import com.gaurav.avnc.util.SamsungDex
 import com.gaurav.avnc.util.debugCheck
 import com.gaurav.avnc.util.enableChildLayoutTransitions
+import com.gaurav.avnc.util.hideKeyboard
 import com.gaurav.avnc.util.isKeyboardVisible
 import com.gaurav.avnc.util.loopAnimatedDrawable
 import com.gaurav.avnc.util.showKeyboard
@@ -108,9 +110,18 @@ class VncActivity : AppCompatActivity() {
         binding.reconnectBtn.setOnClickListener { reconnect() }
         viewModel.loginInfoRequest.observe(this) { showLoginDialog() }
         viewModel.confirmationRequest.observe(this) { showConfirmationDialog() }
+        supportFragmentManager.setFragmentResultListener("shareClipboard", this) { _, result ->
+            viewModel.allowClipboard(result.getString("session"))
+        }
+        viewModel.clipboardConsentRequest.observe(this) { message ->
+            ConfirmDialog.show(supportFragmentManager, "shareClipboard", getString(R.string.pref_clipboard_sync),
+                    message,
+                    Bundle().apply { putString("session", viewModel.clipboardSessionId) })
+        }
         viewModel.state.observe(this) { onClientStateChanged(it) }
         viewModel.profileLive.observe(this) { onProfileUpdated() }
         viewModel.capturePointer.observe(this) { updatePointerCapture(it) }
+        viewModel.remoteKeyboardSource.observe(this) { binding.inputView.onRemoteKeyboardSourceChanged() }
 
         hasActivityRestarted = savedInstanceState != null
         oldState = (savedInstanceState ?: intent.extras)?.let {
@@ -148,7 +159,11 @@ class VncActivity : AppCompatActivity() {
         super.onWindowFocusChanged(hasFocus)
         viewModel.hasWindowFocus.value = hasFocus
         if (hasFocus) {
+            viewModel.checkClipboardConsent()
             viewModel.sendClipboardText()
+            if (viewModel.connected && currentFocus !== virtualKeys.activeTextBox && !binding.inputView.isFocused) {
+                binding.inputView.requestFocus()
+            }
             restoreKeyboard()
             binding.inputView.onWindowFocusGained()
             viewModel.refreshFrameView()
@@ -158,7 +173,9 @@ class VncActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putParcelable(SAVED_STATE_KEY, prepareSavedState())
-        viewModel.profileLive.value?.let { outState.putProfile(it) }
+        viewModel.profileLive.value?.takeUnless { it.isSaved() }?.let {
+            outState.putProfile(it.copy(password = "", sshPassword = "", sshPrivateKey = ""))
+        }
     }
 
     private fun prepareSavedState(reconnectDelay: Int? = null): SavedState {
@@ -196,10 +213,8 @@ class VncActivity : AppCompatActivity() {
             val isSavedServer = startupArg is StartupArg.ProfileId ||
                                 (startupArg is StartupArg.Profile && startupArg.profile.isSaved())
 
-            val isUnlockNeeded = isSavedServer && viewModel.pref.server.lockSavedServer
-                                 && serverUnlockPrompt.canLaunch()
-
-            if (isUnlockNeeded) {
+            if (isSavedServer && viewModel.pref.server.lockSavedServer) {
+                check(serverUnlockPrompt.canLaunch()) { getString(R.string.err_device_auth_unavailable) }
                 serverUnlockPrompt.init(
                         onSuccess = { startSession(startupArg) },
                         onFail = { handleStartupFailure(Exception(it)) })
@@ -333,6 +348,9 @@ class VncActivity : AppCompatActivity() {
         inputHandler.onSessionConnected(this)
         binding.inputView.onSessionConnected()
         virtualKeys.onConnected()
+        if (!virtualKeys.isTextBoxActive) {
+            binding.inputView.requestFocus()
+        }
         SamsungDex.setMetaKeyCapture(this, true)
 
         showViewerHelp()
@@ -435,10 +453,26 @@ class VncActivity : AppCompatActivity() {
     }
 
     fun showKeyboard() {
-        val target = (currentFocus as? EditText) ?: binding.inputView.also { it.requestFocus() }
+        val activeTextBox = virtualKeys.activeTextBox
+        val target: View = if (activeTextBox != null && currentFocus === activeTextBox) {
+            activeTextBox
+        } else {
+            binding.inputView.also { it.requestFocus() }
+        }
         showKeyboard(target)
-        binding.inputView.onImeVisibilityChanged(true)
+        if (target === binding.inputView) {
+            binding.inputView.onImeVisibilityChanged(true)
+        }
         virtualKeys.onKeyboardOpen()
+    }
+
+    fun toggleKeyboard() {
+        val target = virtualKeys.activeTextBox?.takeIf { currentFocus === it } ?: binding.inputView
+        if (isKeyboardVisible(target)) {
+            hideKeyboard(target)
+        } else {
+            showKeyboard()
+        }
     }
 
     private fun updatePointerCapture(capturePointer: Boolean) {
@@ -570,6 +604,9 @@ class VncActivity : AppCompatActivity() {
             viewModel.viewerHelpIsVisible.value = false
             helpBinding.root.animate().alpha(0f).withEndAction {
                 binding.drawerLayout.removeView(helpBinding.root)
+                if (!virtualKeys.isTextBoxActive) {
+                    binding.inputView.requestFocus()
+                }
             }
         }
     }

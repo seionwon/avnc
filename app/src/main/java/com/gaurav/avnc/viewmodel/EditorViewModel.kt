@@ -23,6 +23,8 @@ class EditorViewModel(app: Application, state: SavedStateHandle, initialProfile:
     val profile = state["profile"] ?: initialProfile.copy()
 
     init {
+        profile.appleDisplayMode = ServerProfile.normalizeAppleDisplayMode(profile.appleDisplayMode)
+        profile.appleInitialDisplay = ServerProfile.normalizeAppleInitialDisplay(profile.appleInitialDisplay)
         state["profile"] = profile
     }
 
@@ -46,6 +48,8 @@ class EditorViewModel(app: Application, state: SavedStateHandle, initialProfile:
         profile.idOnRepeater = idOnRepeater.value?.toIntOrNull() ?: 0
         profile.useRawEncoding = useRawEncoding.value == true
         profile.enableWol = enableWol.value == true
+        profile.appleDisplayMode = ServerProfile.normalizeAppleDisplayMode(profile.appleDisplayMode)
+        profile.appleInitialDisplay = ServerProfile.normalizeAppleInitialDisplay(profile.appleInitialDisplay)
         profile.channelType = if (useSshTunnel.value == true) ServerProfile.CHANNEL_SSH_TUNNEL else ServerProfile.CHANNEL_TCP
         profile.sshAuthType = if (sshUsePassword.value == true) ServerProfile.SSH_AUTH_PASSWORD else ServerProfile.SSH_AUTH_KEY
         return profile

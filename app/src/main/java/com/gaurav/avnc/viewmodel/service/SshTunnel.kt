@@ -148,6 +148,7 @@ class SshClient(private val observer: Observer) {
     }
 
     private var connection: Connection? = null
+    val serverHostKey get() = connection?.connectionInfo?.serverHostKey
     private val localHost = "127.0.0.1"
 
     /**

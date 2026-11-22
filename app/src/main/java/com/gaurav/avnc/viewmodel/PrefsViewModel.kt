@@ -62,6 +62,7 @@ class PrefsViewModel(app: Application) : BaseViewModel(app) {
     val exportSettings = MutableLiveData(true)
     val exportProfiles = MutableLiveData(true)
     val exportSecrets = MutableLiveData(false)
+    var pendingFileExportSecrets = false
     val deleteCurrentServerBeforeImport = MutableLiveData(false)
 
     val importExportFinishedEvent = LiveEvent<Result<String>>()
@@ -69,9 +70,9 @@ class PrefsViewModel(app: Application) : BaseViewModel(app) {
     /**
      * Exports data to given [uri].
      */
-    fun export(uri: Uri) {
+    fun export(uri: Uri, includeSecrets: Boolean) {
         launchImportExport {
-            val json = exportJson()
+            val json = exportJson(includeSecrets)
 
             // Write out
             app.contentResolver.openOutputStream(uri)?.use { stream ->
@@ -86,9 +87,9 @@ class PrefsViewModel(app: Application) : BaseViewModel(app) {
      * Exports data as JSON and posts the result on [jsonDestination],
      * for export, e.g. via QR code.
      */
-    fun export(jsonDestination : MutableLiveData<String>) {
+    fun export(jsonDestination : MutableLiveData<String>, includeSecrets: Boolean) {
         launchImportExport {
-            val json = exportJson()
+            val json = exportJson(includeSecrets)
             jsonDestination.postValue(json)
             app.getString(R.string.msg_exported)
         }
@@ -169,10 +170,9 @@ class PrefsViewModel(app: Application) : BaseViewModel(app) {
     /**
      * Serializes current profiles or settings into a backup JSON string.
      */
-    private suspend fun exportJson(): String {
+    private suspend fun exportJson(includeSecrets: Boolean): String {
         val exportSettings = exportSettings.isTrue
         val exportProfiles = exportProfiles.isTrue
-        val exportSecrets = exportSecrets.isTrue && exportProfiles
         debugCheck(exportSettings || exportProfiles)
 
         // Serialize
@@ -181,7 +181,7 @@ class PrefsViewModel(app: Application) : BaseViewModel(app) {
                 preferences = if (exportSettings) collectPreferences() else emptyMap()
         )
 
-        if (!exportSecrets)
+        if (!includeSecrets)
             scrubSecrets(data.profiles)
 
         return serializer.encodeToString(data)
@@ -222,7 +222,7 @@ class PrefsViewModel(app: Application) : BaseViewModel(app) {
         val all = PreferenceManager.getDefaultSharedPreferences(app).all
         val map = mutableMapOf<String, JsonElement>()
         for ((key, value) in all) {
-            if (key.startsWith("run_info_"))
+            if (key.startsWith("run_info_") || key == "lock_saved_server")
                 continue
 
             when (value) {
@@ -246,6 +246,7 @@ class PrefsViewModel(app: Application) : BaseViewModel(app) {
     private fun applyPreferences(prefs: Map<String, JsonElement>) {
         PreferenceManager.getDefaultSharedPreferences(app).edit {
             for ((key, element) in prefs) {
+                if (key == "lock_saved_server") continue
                 when (element) {
                     is JsonPrimitive if element.isString ->
                         putString(key, element.content)

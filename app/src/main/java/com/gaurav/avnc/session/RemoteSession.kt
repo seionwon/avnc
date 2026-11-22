@@ -29,7 +29,7 @@ class RemoteSession(private val observer: Observer) {
 
     interface Observer : VncClient.Observer, SshClient.Observer {
         fun onConnecting()
-        fun onConnected(vncClient: VncClient, messenger: Messenger)
+        fun onConnected(vncClient: VncClient, messenger: Messenger, sshHostKey: ByteArray?)
         fun onDisconnected()
 
         fun onConnectionError(error: Throwable)
@@ -109,7 +109,7 @@ class RemoteSession(private val observer: Observer) {
 
             ServerProfile.CHANNEL_SSH_TUNNEL ->
                 sshClient.openTunnel(profile).use {
-                    vncClient.connect(it.host, it.port)
+                    vncClient.connect(it.host, it.port, certificateHost = profile.host, authenticatedTunnel = true)
                 }
 
             else -> throw IllegalStateException("Unknown Channel: ${profile.channelType}")
@@ -118,7 +118,7 @@ class RemoteSession(private val observer: Observer) {
         messenger = Messenger(vncClient)
 
         log("Connected to server")
-        observer.onConnected(vncClient, messenger!!)
+        observer.onConnected(vncClient, messenger!!, sshClient.serverHostKey)
 
         messageLoop(vncClient)
     }
@@ -146,8 +146,8 @@ class RemoteSession(private val observer: Observer) {
     private fun configureClient(vncClient: VncClient, profile: ServerProfile) {
         vncClient.configure(profile.securityType, true  /* Hardcoded to true */,
                             profile.imageQuality, profile.useRawEncoding)
-        vncClient.configureAppleDisplay(profile.appleDisplayMode,
-                                        profile.appleInitialDisplay,
+        vncClient.configureAppleDisplay(ServerProfile.normalizeAppleDisplayMode(profile.appleDisplayMode),
+                                        ServerProfile.normalizeAppleInitialDisplay(profile.appleInitialDisplay),
                                         profile.viewMode == ServerProfile.VIEW_MODE_NO_INPUT)
 
         if (profile.useRepeater)

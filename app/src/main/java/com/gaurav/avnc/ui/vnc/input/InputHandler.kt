@@ -54,6 +54,9 @@ class InputHandler {
     val isAppleSession: Boolean
         get() = dispatcher?.isAppleKeyboardSyncSupported == true
 
+    val isRemoteSecureInput: Boolean
+        get() = dispatcher?.isRemoteSecureInput == true
+
     val prefersCommittedTextOnly: Boolean
         get() = dispatcher?.prefersCommittedTextOnly == true
 

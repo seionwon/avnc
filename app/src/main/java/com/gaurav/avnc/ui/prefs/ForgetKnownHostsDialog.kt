@@ -29,7 +29,12 @@ class ForgetKnownHostsDialog : DialogFragment() {
     }
 
     private fun forget() {
-        val success = forgetKnownHosts(requireContext()) && deleteTrustedCertificates(requireContext())
+        val context = requireContext()
+        val clearedClipboard = context.getSharedPreferences("clipboard_consent", android.content.Context.MODE_PRIVATE)
+                .edit().clear().commit()
+        val clearedSsh = forgetKnownHosts(context)
+        val clearedCertificates = deleteTrustedCertificates(context)
+        val success = clearedSsh && clearedCertificates && clearedClipboard
         val view: View? = parentFragment?.view ?: requireActivity().findViewById(android.R.id.content)
         if (view != null) {
             if (success)

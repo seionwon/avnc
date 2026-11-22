@@ -12,6 +12,7 @@
 #include <jni.h>
 #include "Cursor.h"
 #include "AppleRfb.h"
+#include "FramebufferTexture.h"
 
 /**
  * We attach some additional data to every rfbClient.
@@ -21,12 +22,10 @@ struct ClientEx {
     // Reference to managed `VncClient`
     jobject managedClient;
 
-    // Although frame width & height are maintained in rfbClient, those values
-    // are modified before our MallocFrameBuffer callback is triggered, and
-    // we cannot protect them with a mutex. So we maintain the framebuffer
-    // size here, protected with fbMutex.
-    int fbRealWidth;
-    int fbRealHeight;
+    // Actual buffer dimensions and completed pixel updates, protected by mutex.
+    FramebufferTexture framebufferTexture;
+    // Accumulated only by the decoder thread until the end of a server update.
+    FramebufferRows pendingRows;
 
     // Cursor data used for client-side cursor rendering
     Cursor *cursor;
@@ -36,6 +35,10 @@ struct ClientEx {
 
     // Saved connection configuration for Apple RFB 3.889 negotiation
     int configuredSecurityType;
+    char *certificateHost;
+    bool authenticatedTunnel;
+    bool verifiedCertificate;
+    int authenticationError;
     int appleDisplayMode;
     int appleInitialDisplay;
     int imageQuality;
@@ -96,6 +99,7 @@ void freeClientExtension(rfbClient *client) {
             ex->appleClient = nullptr;
         }
         TINI_MUTEX(ex->mutex);
+        free(ex->certificateHost);
         freeCursor(ex->cursor);
         free(ex);
         setClientExtension(client, nullptr);

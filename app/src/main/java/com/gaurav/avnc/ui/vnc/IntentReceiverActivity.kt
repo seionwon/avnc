@@ -17,7 +17,10 @@ import com.gaurav.avnc.R
 import com.gaurav.avnc.model.ServerProfile
 import com.gaurav.avnc.model.db.MainDb
 import com.gaurav.avnc.vnc.VncUri
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.launch
+import kotlin.coroutines.resume
 
 /**
  * Handles "external" intents and launches [VncActivity] with appropriate profiles.
@@ -62,58 +65,47 @@ class IntentReceiverActivity : AppCompatActivity() {
         if (!validateUri(uri))
             return
 
-        if (uri.saveConnection)
-            saveVncUri(uri)
+        if (uri.host.isNullOrBlank()) {
+            val id = profileDao.findIdByName(uri.connectionName.orEmpty())
+            if (id == null) toast("No server found with name '${uri.connectionName}'")
+            else startVncActivity(this, ServerProfile(ID = id))
+            return
+        }
 
-        launchFromVncUri(uri)
-    }
-
-    private suspend fun launchFromVncUri(uri: VncUri) {
-        val matchingProfile = findAndMergeMatchingProfile(uri)
-
-        if (matchingProfile != null)
-            startVncActivity(this, matchingProfile)
-        else if (!uri.host.isNullOrBlank())
-            startVncActivity(this, uri)
-        else if (!uri.connectionName.isNullOrBlank())
-            toast("No server found with name '${uri.connectionName}'")
-        else
-            toast(getString(R.string.msg_invalid_vnc_uri))
+        val profile = uri.toServerProfile()
+        if (uri.saveConnection) {
+            if (!confirmSave(profile)) return
+            val id = profileDao.addFromLink(profile)
+            if (id == null) {
+                toast(getString(R.string.msg_link_name_in_use))
+                return
+            }
+            profile.ID = id
+            toast(getString(R.string.msg_link_added))
+        }
+        startVncActivity(this, profile)
     }
 
     private suspend fun launchFromProfileId(profileId: Long) {
-        val profile = profileDao.getByID(profileId)
-        if (profile == null) toast(getString(R.string.msg_shortcut_server_deleted))
-        else startVncActivity(this, profile)
+        if (!profileDao.exists(profileId)) toast(getString(R.string.msg_shortcut_server_deleted))
+        else startVncActivity(this, ServerProfile(ID = profileId))
     }
 
 
-    private suspend fun findAndMergeMatchingProfile(uri: VncUri): ServerProfile? {
-        return uri.connectionNameForProfile
-                ?.let { profileDao.getByName(it).firstOrNull() }
-                ?.let { uri.applyToProfile(it) }
-    }
-
-    private suspend fun saveVncUri(uri: VncUri) {
-        if (!uri.saveConnection)
-            return
-
-        val profile = findAndMergeMatchingProfile(uri) ?: uri.toServerProfile()
-        if (profile.host.isBlank())
-            return
-
-        val id = profileDao.save(profile)
-        if (id > 0) // New profile
-            toast("Added new server for URI")
+    private suspend fun confirmSave(profile: ServerProfile): Boolean = suspendCancellableCoroutine { result ->
+        val dialog = MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.title_save_link)
+                .setMessage(getString(R.string.msg_save_link, profile.name, profile.endpointDescription()))
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.resume(true) }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> result.resume(false) }
+                .setOnCancelListener { result.resume(false) }
+                .show()
+        result.invokeOnCancellation { dialog.dismiss() }
     }
 
     private fun validateUri(uri: VncUri): Boolean {
-        if (uri.host.isNullOrBlank() && uri.connectionName.isNullOrBlank()) {
-            toast(getString(R.string.msg_invalid_vnc_uri))
-            return false
-        }
-
-        if (uri.host.isNullOrBlank() && uri.connectionName.isNullOrBlank()) {
+        if (uri.host.isNullOrBlank() && uri.connectionName.isNullOrBlank() ||
+            uri.port?.let { it !in 0..65535 } == true || uri.sshPort?.let { it !in 1..65535 } == true) {
             toast(getString(R.string.msg_invalid_vnc_uri))
             return false
         }

@@ -7,5 +7,6 @@
   -->
 
 <resources>
+    <bool name="allow_system_backup">false</bool>
     <bool name="leak_canary_watcher_auto_install">false</bool>
 </resources>

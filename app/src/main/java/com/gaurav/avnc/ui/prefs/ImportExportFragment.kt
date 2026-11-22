@@ -40,7 +40,7 @@ import java.util.Date
 @Keep
 class ImportExportFragment : Fragment() {
 
-    private enum class Tag { Import, ImportQr, Export, ExportQr }
+    private enum class Tag { Import, ImportQr, Export, ExportQr, ExportSecrets, ExportQrSecrets }
 
     companion object {
         private const val REQUEST_IMPORT_URI = "request_import_uri"
@@ -117,21 +117,33 @@ class ImportExportFragment : Fragment() {
      * This is to protect sensitive info that might be present in exported data.
      */
     private fun checkAuthAndStart(tag: Tag) {
-        if (authPrompt.canLaunch())
-            authPrompt.launch(getString(R.string.msg_export_auth_required), tag)
-        else
-            start(tag)
+        val action = if (viewModel.exportProfiles.value == true && viewModel.exportSecrets.value == true) {
+            when (tag) {
+                Tag.Export -> Tag.ExportSecrets
+                Tag.ExportQr -> Tag.ExportQrSecrets
+                else -> tag
+            }
+        } else tag
+        when {
+            authPrompt.canLaunch() -> authPrompt.launch(getString(R.string.msg_export_auth_required), action)
+            viewModel.pref.server.lockSavedServer || action == Tag.ExportSecrets || action == Tag.ExportQrSecrets ->
+                showMsg(getString(R.string.err_device_auth_unavailable))
+            else -> start(action)
+        }
     }
 
     private fun start(tag: Tag) {
         when (tag) {
             Tag.Import -> launchFilePicker(importFilePicker, arrayOf("*/*"))
             Tag.ImportQr -> launchScan()
-            Tag.Export -> launchFilePicker(exportFilePicker, generateFilename())
-            Tag.ExportQr -> {
+            Tag.Export, Tag.ExportSecrets -> {
+                viewModel.pendingFileExportSecrets = tag == Tag.ExportSecrets
+                launchFilePicker(exportFilePicker, generateFilename())
+            }
+            Tag.ExportQr, Tag.ExportQrSecrets -> {
                 val json = MutableLiveData<String>()
                 json.observe(viewLifecycleOwner) { showQrDialog(it) }
-                viewModel.export(json)
+                viewModel.export(json, tag == Tag.ExportQrSecrets)
             }
         }
     }
@@ -174,8 +186,10 @@ class ImportExportFragment : Fragment() {
     }
 
     private fun export(uri: Uri?) {
+        val includeSecrets = viewModel.pendingFileExportSecrets
+        viewModel.pendingFileExportSecrets = false
         if (uri != null)
-            viewModel.export(uri)
+            viewModel.export(uri, includeSecrets)
     }
 
     private fun handleImportExportResult(result: Result<String>) {

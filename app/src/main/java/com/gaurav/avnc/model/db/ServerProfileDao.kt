@@ -12,6 +12,7 @@ import androidx.lifecycle.LiveData
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import androidx.room.Upsert
 import com.gaurav.avnc.model.ServerProfile
@@ -34,6 +35,19 @@ interface ServerProfileDao {
 
     @Query("SELECT * FROM profiles WHERE name = :name")
     suspend fun getByName(name: String): List<ServerProfile>
+
+    @Query("SELECT ID FROM profiles WHERE name = :name ORDER BY ID LIMIT 1")
+    suspend fun findIdByName(name: String): Long?
+
+    @Query("SELECT EXISTS(SELECT 1 FROM profiles WHERE ID = :id)")
+    suspend fun exists(id: Long): Boolean
+
+    @Transaction
+    suspend fun addFromLink(profile: ServerProfile): Long? {
+        require(!profile.isSaved())
+        if (findIdByName(profile.name) != null) return null
+        return save(profile)
+    }
 
     @Query("SELECT * FROM profiles WHERE flags & ${ServerProfile.FLAG_CONNECT_ON_APP_START} != 0")
     suspend fun getConnectableOnAppStart(): List<ServerProfile>

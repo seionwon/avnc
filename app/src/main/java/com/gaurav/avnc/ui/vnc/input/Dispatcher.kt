@@ -183,6 +183,9 @@ class Dispatcher(private val activity: VncActivity) {
     val isAppleKeyboardSyncSupported: Boolean
         get() = viewModel.isAppleKeyboardSyncSupported
 
+    val isRemoteSecureInput: Boolean
+        get() = viewModel.remoteKeyboardSource.value?.secureInput == true
+
     val shouldPasteAsciiDuringMacIme: Boolean
         get() {
             val src = viewModel.remoteKeyboardSource.value
@@ -190,17 +193,18 @@ class Dispatcher(private val activity: VncActivity) {
         }
 
     /**
-     * When macOS is still in an Input Method (or 1109 hasn't confirmed a keylayout yet),
+     * When macOS is confirmed to be in an Input Method (e.g. `2SetKorean`),
      * hold uncommitted Hangul composition locally in Android's IME and only flush committed
      * text via atomic PasteText (never send rapid BackSpace + Cmd+V per jamo).
-     * Once macOS is on ABC/US (`!isInputMethod`), live atomic 0x04 Unicode diffs work cleanly.
+     * When macOS is on ABC/US (or 1109 hasn't reported an IME), allow live atomic 0x04
+     * Unicode diffs so phone keyboards that compose every word never appear dead.
      */
     val prefersCommittedTextOnly: Boolean
         get() {
             if (!isAppleKeyboardSyncSupported) return false
-            val src = viewModel.remoteKeyboardSource.value
-            if (src?.secureInput == true) return false
-            return src == null || src.isInputMethod
+            val src = viewModel.remoteKeyboardSource.value ?: return false
+            if (src.secureInput) return false
+            return src.isInputMethod
         }
 
     fun ensureMacNonImeForSoftKeyboard() {

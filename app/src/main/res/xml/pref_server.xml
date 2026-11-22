@@ -11,8 +11,9 @@
 
 
     <SwitchPreference
-        app:defaultValue="true"
+        app:defaultValue="false"
         app:key="clipboard_sync"
+        app:summary="@string/pref_clipboard_consent_summary"
         app:title="@string/pref_clipboard_sync" />
 
     <SwitchPreference

@@ -11,6 +11,7 @@ package com.gaurav.avnc.ui.vnc
 import android.content.Intent
 import android.view.InputDevice
 import android.view.KeyEvent
+import androidx.lifecycle.Lifecycle
 import androidx.core.content.edit
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
@@ -173,19 +174,51 @@ class VncActivityTest : VncSessionTest() {
 
     @Test
     fun clientToServerClipboard() {
+        targetPrefs.edit { putBoolean("clipboard_sync", true) }
         val sample = "Pivot! Pivot! Pivot! Pivot!!!"
         setClipboardText(sample)
-        vncSession.run {
+        vncSession.suppressViewerHelp().startServer().startActivity()
+        try {
+            onView(withText(android.R.string.ok)).checkWillBeDisplayed()
+            assertEquals("", vncSession.server.receivedCutText)
+            onView(withText(android.R.string.ok)).doClick()
             pollingAssert { assertEquals(sample, vncSession.server.receivedCutText) }
+        } finally {
+            vncSession.stop()
+        }
+    }
+
+    @Test
+    fun decliningClipboardKeepsSessionConnected() {
+        targetPrefs.edit { putBoolean("clipboard_sync", true) }
+        setClipboardText("device fixture")
+        vncSession.startServer().startActivity()
+        try {
+            onView(withText(android.R.string.cancel)).checkWillBeDisplayed().doClick()
+            vncSession.assertConnected()
+            vncSession.server.sendCutText("remote fixture")
+            vncSession.onActivity { it.onWindowFocusChanged(true) }
+            instrumentation.waitForIdleSync()
+            assertEquals("device fixture", com.gaurav.avnc.getClipboardText())
+            assertEquals("", vncSession.server.receivedCutText)
+        } finally {
+            vncSession.stop()
         }
     }
 
     @Test
     fun clientToServerClipboardWithHtmlClip() {
+        targetPrefs.edit { putBoolean("clipboard_sync", true) }
         val sample = "Pivot! Pivot! Pivot! Pivot!!!"
         setClipboardHtml(sample)
-        vncSession.run {
+        vncSession.suppressViewerHelp().startServer().startActivity()
+        try {
+            onView(withText(android.R.string.ok)).checkWillBeDisplayed()
+            assertEquals("", vncSession.server.receivedCutText)
+            onView(withText(android.R.string.ok)).doClick()
             pollingAssert { assertEquals(sample, vncSession.server.receivedCutText) }
+        } finally {
+            vncSession.stop()
         }
     }
 
@@ -205,6 +238,21 @@ class VncActivityTest : VncSessionTest() {
             }
         }
         assertEquals(XKeySym.XF86XK_Back, vncSession.server.receivedKeyDowns.getOrNull(0))
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 28)
+    fun savedServerRequiresAvailableAuthentication() {
+        targetPrefs.edit { putBoolean("lock_saved_server", true) }
+        vncSession.saveProfileToDB(dbRule.db)
+        BiometricMocking.start(isAuthAvailable = false)
+        try {
+            vncSession.startActivity()
+            pollingAssert { assertEquals(Lifecycle.State.DESTROYED, vncSession.activityScenario!!.state) }
+        } finally {
+            BiometricMocking.end()
+            vncSession.stop()
+        }
     }
 
     @Test

@@ -69,9 +69,14 @@ class Toolbar(private val activity: VncActivity) {
     private val openWithButton = viewModel.pref.viewer.toolbarOpenWithButton
     private val openerButton = activity.binding.openToolbarBtn
     private val flyouts = mutableMapOf<ToggleButton, View>()
+    private var showKeyboardOnDrawerClosed = false
 
     fun initialize() {
-        binding.keyboardBtn.setOnClickListener { activity.showKeyboard(); close() }
+        binding.keyboardBtn.setOnClickListener {
+            showKeyboardOnDrawerClosed = true
+            close()
+            activity.showKeyboard()
+        }
         binding.zoomOptionsToggle.setOnLongClickListener { resetZoomToDefault(); close(); true }
         binding.zoomResetBtn.setOnClickListener { resetZoomToDefault(); close() }
         binding.zoomResetBtn.setOnLongClickListener { resetZoom(); close(); true }
@@ -212,10 +217,7 @@ class Toolbar(private val activity: VncActivity) {
                 }
             }
 
-            val allLabel = activity.getString(R.string.title_display_all)
-            addDisplayButton(RemoteDisplayState.ALL_DISPLAYS, allLabel, allLabel)
-
-            state.displays.forEach { display ->
+            state.selectableDisplays.forEach { display ->
                 val shortName = activity.getString(R.string.title_display_numbered, display.index)
                 val fullLabel = if (display.width > 0 && display.height > 0) {
                     activity.getString(R.string.title_display_numbered_with_size,
@@ -383,6 +385,10 @@ class Toolbar(private val activity: VncActivity) {
             override fun onDrawerClosed(closedView: View) {
                 if (closedView == drawerView) {
                     flyouts.keys.forEach { it.isChecked = false }
+                    if (showKeyboardOnDrawerClosed) {
+                        showKeyboardOnDrawerClosed = false
+                        activity.showKeyboard()
+                    }
                 }
             }
         })

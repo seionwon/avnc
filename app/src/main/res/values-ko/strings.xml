@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="err_device_auth_unavailable">계속하려면 기기의 화면 잠금을 설정하거나 기기 인증을 다시 사용할 수 있도록 해 주세요.</string>
+    <string name="title_save_link">링크의 서버를 저장할까요?</string>
+    <string name="msg_save_link">%1$s을(를) 저장하고 %2$s에 연결할까요?</string>
+    <string name="msg_link_name_in_use">이미 같은 이름의 서버가 있습니다. 변경하려면 서버 목록에서 편집해 주세요.</string>
+    <string name="msg_link_added">링크의 서버를 추가했습니다.</string>
+    <string name="title_verify_certificate">서버 인증서 확인</string>
+    <string name="msg_verify_certificate">서버 주소 %1$s\n\nSHA-256 지문 %2$s\n\n서버 관리자에게 확인한 지문과 일치할 때 계속해 주세요.</string>
+    <string name="pref_clipboard_consent_summary">서버에 클립보드 텍스트를 공유하기 전에 허용 여부를 묻습니다.</string>
+    <string name="msg_allow_clipboard">지금부터 %1$s에 연결할 때마다 이 기기의 클립보드 텍스트를 읽고 바꾸도록 허용할까요? 설정의 서버 항목에서 권한을 해제할 수 있습니다.</string>
+    <string name="msg_allow_clipboard_once">이번 연결 동안 %1$s에서 이 기기의 클립보드 텍스트를 읽고 바꾸도록 허용할까요?</string>
     <string name="title_edit_server_profile">서버 편집</string>
     <string name="title_duplicate">복제</string>
     <string name="title_edit">편집</string>
@@ -225,18 +235,17 @@
     <string name="title_apple_display_mode">macOS 디스플레이</string>
     <string name="title_apple_display_standard">표준 (물리 디스플레이)</string>
     <string name="title_apple_display_virtual_1">고성능: 가상 디스플레이 1개</string>
-    <string name="title_apple_display_virtual_2">고성능: 가상 디스플레이 2개</string>
-    <string name="summary_apple_display_standard">Mac에 연결된 실제 모니터를 사용하며, 뷰어 도구 모음에서 디스플레이를 전환할 수 있습니다</string>
+    <string name="summary_apple_display_standard">Mac에 연결된 실제 모니터(최대 6개) 중 하나를 선택해 표시하며, 뷰어 도구 모음에서 전환할 수 있습니다</string>
     <string name="summary_apple_display_virtual_1">Apple Silicon Mac(macOS Sonoma 이상)에 가상 디스플레이 1개를 생성합니다</string>
-    <string name="summary_apple_display_virtual_2">Apple Silicon Mac(macOS Sonoma 이상)에 가상 디스플레이 2개를 생성한 뒤 디스플레이 1 또는 2로 전환할 수 있습니다</string>
     <string name="title_apple_initial_display">초기 디스플레이</string>
-    <string name="title_display_all">전체 디스플레이</string>
     <string name="title_display_1">디스플레이 1</string>
     <string name="title_display_2">디스플레이 2</string>
     <string name="title_display_3">디스플레이 3</string>
     <string name="title_display_4">디스플레이 4</string>
+    <string name="title_display_5">디스플레이 5</string>
+    <string name="title_display_6">디스플레이 6</string>
     <string name="title_display_numbered">디스플레이 %1$d</string>
     <string name="title_display_numbered_with_size">디스플레이 %1$d (%2$d×%3$d)</string>
     <string name="desc_display_options_toggle">디스플레이 전환</string>
-    <string name="msg_apple_display_mode_help">macOS 내장 화면 공유(macOS 사용자 계정 로그인)에서 동작합니다.\n\n• <b>표준</b>: Mac에 연결된 물리 모니터로 접속합니다.\n• <b>고성능: 가상 디스플레이 1개 / 2개</b>: macOS 내장 화면 공유 클라이언트와 동일하게 Apple Silicon Mac(macOS Sonoma 이상)에 가상 디스플레이를 생성합니다.\n\n<b>초기 디스플레이</b>를 디스플레이 1 등으로 지정하거나, 접속 후 뷰어 도구 모음의 디스플레이 버튼에서 전체 디스플레이 / 디스플레이 1 / 디스플레이 2를 실시간으로 전환할 수 있습니다.</string>
+    <string name="msg_apple_display_mode_help">macOS 내장 화면 공유(macOS 사용자 계정 로그인)에서 동작합니다.\n\n• <b>표준</b>: Mac에 연결된 물리 모니터(최대 6개) 중 하나를 선택해 접속합니다.\n• <b>고성능: 가상 디스플레이 1개</b>: Apple Silicon Mac(macOS Sonoma 이상)에 단일 가상 디스플레이를 생성합니다.\n\n<b>초기 디스플레이</b>에서 디스플레이 1~6 중 하나를 지정하거나, 접속 후 뷰어 도구 모음의 디스플레이 버튼에서 1개 디스플레이를 실시간으로 전환할 수 있습니다.</string>
 </resources>

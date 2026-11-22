@@ -19,7 +19,9 @@ import com.gaurav.avnc.doClick
 import com.gaurav.avnc.targetContext
 import com.gaurav.avnc.ui.prefs.PrefsActivity
 import com.gaurav.avnc.util.KnownHostsTest.Companion.getTestCert
-import com.gaurav.avnc.util.isCertificateTrusted
+import com.gaurav.avnc.model.ServerProfile
+import com.gaurav.avnc.util.CertificateTrust
+import com.gaurav.avnc.util.certificateTrust
 import com.gaurav.avnc.util.trustCertificate
 import org.junit.Assert
 import org.junit.Rule
@@ -61,8 +63,9 @@ class PrefsActivityTest {
 
     @Test
     fun forgetKnownHosts() {
-        trustCertificate(targetContext, getTestCert())
-        Assert.assertTrue(isCertificateTrusted(targetContext, getTestCert()))
+        val profile = ServerProfile(host = "example.com")
+        trustCertificate(targetContext, profile, getTestCert())
+        Assert.assertEquals(CertificateTrust.Trusted, certificateTrust(targetContext, profile, getTestCert()))
 
         openSection(pref_servers, pref_server_summary, pref_forget_known_hosts)
         onView(withText(pref_forget_known_hosts)).doClick()
@@ -70,7 +73,7 @@ class PrefsActivityTest {
         onView(withText(title_forget)).doClick()
         onView(withText(msg_done)).checkWillBeDisplayed()
 
-        Assert.assertFalse(isCertificateTrusted(targetContext, getTestCert()))
+        Assert.assertEquals(CertificateTrust.Unknown, certificateTrust(targetContext, profile, getTestCert()))
     }
 
     /**

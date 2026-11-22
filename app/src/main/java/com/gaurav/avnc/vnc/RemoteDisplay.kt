@@ -30,16 +30,21 @@ data class RemoteDisplay(
 
 /**
  * Snapshot of available remote displays and the active selection.
+ * Supports selecting a single display out of up to [MAX_SELECTABLE_DISPLAYS] monitors.
  */
 data class RemoteDisplayState(
         val currentDisplayId: Long = ALL_DISPLAYS,
         val displays: List<RemoteDisplay> = emptyList(),
         val supportsSelection: Boolean = false
 ) {
+    val selectableDisplays: List<RemoteDisplay>
+        get() = displays.take(MAX_SELECTABLE_DISPLAYS)
+
     val canSwitchDisplays: Boolean
-        get() = supportsSelection && displays.size > 1
+        get() = supportsSelection && selectableDisplays.size > 1
 
     companion object {
         const val ALL_DISPLAYS = 0L
+        const val MAX_SELECTABLE_DISPLAYS = 6
     }
 }

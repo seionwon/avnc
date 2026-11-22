@@ -17,6 +17,10 @@ else ()
     message(FATAL_ERROR "Unknown ANDROID_ABI: ${ANDROID_ABI}")
 endif ()
 
+set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg-ports")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg-ports/libressl/portfile.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg-ports/libressl/vcpkg.json")
 set(VCPKG_BOOTSTRAP_OPTIONS "-disableMetrics")
 set(ENV{ANDROID_NDK_HOME} ${ANDROID_NDK})
 

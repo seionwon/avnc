@@ -21,6 +21,8 @@ import android.opengl.GLES20.glViewport
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import com.gaurav.avnc.viewmodel.VncViewModel
+import com.gaurav.avnc.vnc.CursorInfo
+import com.gaurav.avnc.vnc.VncClient
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -34,6 +36,9 @@ class Renderer(val viewModel: VncViewModel) : GLSurfaceView.Renderer {
     private lateinit var program: Program
     private lateinit var frame: Frame
     private lateinit var cursor: Cursor
+    private var textureClient: VncClient? = null
+    private var uploadedFrameRevision = 0L
+    private var uploadedCursor: CursorInfo? = null
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         glClearColor(0f, 0f, 0f, 1f)
@@ -41,6 +46,7 @@ class Renderer(val viewModel: VncViewModel) : GLSurfaceView.Renderer {
         frame = Frame()
         cursor = Cursor()
         program = Program()
+        textureClient = null
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -94,6 +100,12 @@ class Renderer(val viewModel: VncViewModel) : GLSurfaceView.Renderer {
         if (state.vpWidth == 0f || state.vpHeight == 0f)
             return
 
+        if (textureClient !== client) {
+            textureClient = client
+            uploadedFrameRevision = 0L
+            uploadedCursor = null
+        }
+
         Matrix.setIdentityM(projectionMatrix, 0)
         Matrix.orthoM(projectionMatrix, 0, 0f, state.vpWidth, -state.vpHeight, 0f, -1f, 1f)
         Matrix.translateM(projectionMatrix, 0, state.frameX, -state.frameY, 0f)
@@ -104,20 +116,28 @@ class Renderer(val viewModel: VncViewModel) : GLSurfaceView.Renderer {
 
         frame.updateFbSize(state.fbWidth, state.fbHeight)
         frame.bind(program)
-        client.uploadFrameTexture()
+        uploadedFrameRevision = client.uploadFrameTexture(uploadedFrameRevision)
+        if (uploadedFrameRevision == 0L)
+            return
         frame.draw()
 
         program.validate()
 
         if (drawCursor) {
+            val ci = client.cursorInfo
+            if (ci.width == 0 || ci.height == 0)
+                return
+
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-            val ci = client.cursorInfo
 
             cursor.update(client.pointerX.toFloat(), client.pointerY.toFloat(), ci, frame)
             cursor.bind(program)
-            client.uploadCursorTexture()
-            cursor.draw()
+            // Every shape notification has its own CursorInfo even if the dimensions match.
+            if (uploadedCursor === ci || client.uploadCursorTexture()) {
+                uploadedCursor = ci
+                cursor.draw()
+            }
 
             glDisable(GL_BLEND)
         }

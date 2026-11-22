@@ -84,6 +84,12 @@ static const char *errnoToStr(int e) {
 
         case EACCES:
             return "Authentication failed";
+        case EPROTONOSUPPORT:
+            return "This account login requires a verified SSH tunnel, X.509 TLS, or Apple SRP.";
+        case EBADMSG:
+            return "Server certificate verification failed. Check the hostname, validity and saved fingerprint.";
+        case EOVERFLOW:
+            return "Remote framebuffer exceeds the supported size.";
 
         case 0:
             return "Connection closed by server";

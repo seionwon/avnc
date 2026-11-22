@@ -94,16 +94,18 @@ class MacKeyboardSyncTest {
         val ko = RemoteKeyboardSource("com.apple.inputmethod.Korean.2SetKorean")
         val secure = RemoteKeyboardSource("com.apple.keylayout.ABC", secureInput = true)
 
-        // Confirmed non-IME keylayout (ABC): both English and Hangul BMP use fast direct 0x04 Unicode!
+        // Confirmed non-IME keylayout (ABC) or unreported (null): both English and Hangul BMP
+        // use fast direct 0x04 Unicode so phone keyboards that compose words never freeze silently.
         assertFalse(MacKeyboardSync.shouldUsePasteText("hello", abc))
         assertFalse(MacKeyboardSync.shouldUsePasteText("한글", abc))
+        assertFalse(MacKeyboardSync.shouldUsePasteText("한글", null))
+        assertFalse(MacKeyboardSync.shouldUsePasteText("hello", null))
         // Non-BMP emoji always uses PasteText (macOS 0x04 posts 16-bit UniChar)
         assertTrue(MacKeyboardSync.shouldUsePasteText("😀", abc))
-        // Active macOS Input Method (2SetKorean) or unknown (null): safely use atomic PasteText!
+        assertTrue(MacKeyboardSync.shouldUsePasteText("😀", null))
+        // Confirmed active macOS Input Method (2SetKorean): safely use atomic PasteText!
         assertTrue(MacKeyboardSync.shouldUsePasteText("hello", ko))
         assertTrue(MacKeyboardSync.shouldUsePasteText("한글", ko))
-        assertTrue(MacKeyboardSync.shouldUsePasteText("한글", null))
-        assertTrue(MacKeyboardSync.shouldUsePasteText("hello", null))
         // Whitespace/control and secureInput password fields always use 0x04 KeyEvents
         assertFalse(MacKeyboardSync.shouldUsePasteText(" ", ko))
         assertFalse(MacKeyboardSync.shouldUsePasteText("\n", ko))

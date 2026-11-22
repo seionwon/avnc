@@ -9,13 +9,13 @@
 package com.gaurav.avnc.util
 
 import android.content.Context
+import android.util.AtomicFile
 import android.util.Log
+import com.gaurav.avnc.model.ServerProfile
 import java.io.File
 import java.security.MessageDigest
 import java.security.cert.Certificate
-import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
-import javax.security.auth.x500.X500Principal
 
 private const val TAG = "KnownHosts"
 
@@ -23,90 +23,55 @@ private const val TAG = "KnownHosts"
 fun getKnownHostsFile(context: Context) = File(context.filesDir, "known-hosts")
 
 fun forgetKnownHosts(context: Context): Boolean {
-    return runCatching { getKnownHostsFile(context).delete() }
+    return runCatching { getKnownHostsFile(context).let { !it.exists() || it.delete() } }
             .onFailure { Log.e(TAG, "Cannot forget known hosts", it) }
-            .isSuccess
+            .getOrDefault(false)
 }
 
 //------------------ Trusted certificates -------------------------
-private fun bytesToHex(bytes: ByteArray): String {
-    val chars = "0123456789abcdef"
-    val result = StringBuilder(2 * bytes.size)
-    for (b in bytes) {
-        // convert to unsigned
-        val v = b.toInt() and 0xff
-        result.append(chars[v / 16])
-        result.append(chars[v % 16])
+enum class CertificateTrust { Unknown, Trusted, Changed }
+
+fun certificateFingerprint(certificate: Certificate): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(certificate.encoded)
+
+private fun pinFile(context: Context, profile: ServerProfile) =
+        AtomicFile(File(context.filesDir, "trusted_certs/v2/${profile.endpointKey()}"))
+
+@Synchronized
+fun certificateTrust(context: Context, profile: ServerProfile, certificate: Certificate): CertificateTrust {
+    val pin = pinFile(context, profile)
+    val stored = try { pin.readFully() } catch (_: java.io.FileNotFoundException) { return CertificateTrust.Unknown }
+    return if (MessageDigest.isEqual(stored, certificateFingerprint(certificate))) CertificateTrust.Trusted
+           else CertificateTrust.Changed
+}
+
+@Synchronized
+fun trustCertificate(context: Context, profile: ServerProfile, certificate: Certificate): Boolean {
+    when (certificateTrust(context, profile, certificate)) {
+        CertificateTrust.Trusted -> return true
+        CertificateTrust.Changed -> return false
+        CertificateTrust.Unknown -> Unit
     }
-    return result.toString()
-}
-
-private fun getTrustedCertsDir(context: Context) = File(context.filesDir, "trusted_certs")
-
-private fun getFileForTrustedCertificate(context: Context, certificate: Certificate): File {
-    val certDigest = MessageDigest.getInstance("SHA1").digest(certificate.encoded)
-    val certFileName = bytesToHex(certDigest)
-    val certDir = getTrustedCertsDir(context)
-    return File(certDir, certFileName)
-}
-
-/**
- * Adds given [certificate] to trusted list.
- */
-fun trustCertificate(context: Context, certificate: Certificate) {
-    runCatching {
-        val certDir = getTrustedCertsDir(context)
-        val certFile = getFileForTrustedCertificate(context, certificate)
-        certDir.mkdirs()
-        certFile.writeBytes(certificate.encoded)
-    }.onFailure {
-        Log.e(TAG, "Error trusting certificate", it)
+    val file = pinFile(context, profile)
+    file.baseFile.parentFile?.mkdirs()
+    val stream = file.startWrite()
+    try {
+        stream.write(certificateFingerprint(certificate))
+        file.finishWrite(stream)
+    } catch (e: Exception) {
+        file.failWrite(stream)
+        throw e
     }
+    return certificateTrust(context, profile, certificate) == CertificateTrust.Trusted
 }
 
-fun deleteTrustedCertificates(context: Context): Boolean {
-    return runCatching { getTrustedCertsDir(context).deleteRecursively() }
-            .onFailure { Log.e(TAG, "Cannot delete trusted", it) }
-            .isSuccess
-}
+@Synchronized
+fun deleteTrustedCertificates(context: Context): Boolean =
+        File(context.filesDir, "trusted_certs").let { !it.exists() || it.deleteRecursively() }
 
-/**
- * Checks whether given [certificate] is trusted.
- */
-fun isCertificateTrusted(context: Context, certificate: Certificate): Boolean {
-    runCatching {
-        val trustedFile = getFileForTrustedCertificate(context, certificate)
-        if (!trustedFile.exists())
-            return false
-
-        // This should always succeed once file exists
-        val certFactory = CertificateFactory.getInstance("X.509")
-        val trustedCert = trustedFile.inputStream().use { certFactory.generateCertificate(it) }
-        if (trustedCert.equals(certificate))
-            return true
-    }.onFailure {
-        Log.w(TAG, "Error checking certificate", it)
-    }
-    return false
-}
-
-fun getUnknownCertificateMessage(certificate: X509Certificate): String {
-    fun commonName(p: X500Principal) = p.name.split(',')  // Doesn't handle escaped comma
-                                               .find { it.startsWith("CN=", true) }
-                                               ?.drop(3) ?: "Unknown"
-
-    val subject = commonName(certificate.subjectX500Principal)
-    val issuer = commonName(certificate.issuerX500Principal)
-    val fingerprint = MessageDigest.getInstance("SHA1").digest(certificate.encoded)
-            .toHexString(HexFormat { upperCase = true; bytes { byteSeparator = " " } })
-
-    return """
-        Certificate received from server is not trusted. Someone might be impersonating the server.
-        
-        Subject: $subject
-        Issuer: $issuer
-        Fingerprint (SHA1): $fingerprint 
-        
-        Make sure you are connecting to right server. Click Continue to add this certificate to trusted list.
-    """.trimIndent()
+fun getUnknownCertificateMessage(context: Context, profile: ServerProfile, certificate: X509Certificate): String {
+    val fingerprint = certificateFingerprint(certificate)
+            .toHexString(HexFormat { upperCase = true; bytes { byteSeparator = ":" } })
+    return context.getString(com.gaurav.avnc.R.string.msg_verify_certificate,
+                             profile.endpointDescription(), fingerprint)
 }

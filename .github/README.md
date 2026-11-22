@@ -22,13 +22,13 @@
 ## What Changed in This Fork / 이번에 추가·개선된 핵심 기능
 
 ### 1. macOS Multi-Monitor & Single-Display Selection (`RFB 3.889`) / 다중 모니터 서버에서 단일 모니터 선택
-Connect to a macOS host with multiple external displays and view **only the single display you want** — matching macOS's built-in Screen Sharing client (**High Performance → 1 or 2 Virtual Displays → View → Display 1**):
+Connect to a macOS host with up to **6 monitors** and view **only the single display you want** (`Display 1`–`Display 6`, single-display selection only):
 - **Native Apple RFB 3.889 Engine** (`AppleRfb.h` / `AppleRfb.cpp`): Automatically detects macOS Screen Sharing (`RFB 003.889`), authenticates with Apple SRP (36) / RSA (33) / DH (30), activates the AES-128-CBC + SHA-1 record layer (`1103`), and falls back cleanly to standard LibVNCClient for non-Apple or VncAuth-only servers.
-- **Virtual Displays & Display Switching**: Supports `0x1d` (`SetDisplayConfiguration`) for 1 or 2 Virtual Displays, parses `1105` (`DisplayLayout`), and switches between **Display 1**, **Display 2**, …, or **All Displays** via `0x0d` (`SetDisplay`) both automatically on connect (Profile Editor → Advanced) and live during a session (Toolbar → Display button).
+- **Single-Display Selection (Up to 6 Monitors)**: Supports `Standard (Physical displays)` and `High Performance: 1 Virtual Display` (`0x1d`), parses `1105` (`DisplayLayout`), and lets you select **one single display out of up to 6** (**Display 1** through **Display 6**) via `0x0d` (`SetDisplay`) both automatically on connect (Profile Editor → Advanced) and live during a session (Toolbar → Display button).
 
-다중 외장 모니터가 연결된 맥(macOS Screen Sharing)에서 **원하는 디스플레이 1개만 골라 접속**할 수 있습니다(맥 내장 화면 공유의 **고성능 → 가상 디스플레이 1/2개 → 보기 → 디스플레이 1**과 동일한 동작):
+최대 **6대의 모니터**가 연결된 맥(macOS Screen Sharing)에서 **그중 원하는 1개의 디스플레이(`디스플레이 1`~`디스플레이 6`)만 골라 접속**할 수 있습니다:
 - **네이티브 Apple RFB 3.889 구현**: macOS 서버(`RFB 003.889`) 자동 감지, SRP(36)/RSA(33)/DH(30) 계정 인증, AES-128-CBC 암호화 레코드 계층 지원(일반 VNC 서버는 기존 LibVNCClient로 자동 폴백).
-- **가상 디스플레이 & 실시간 모니터 전환**: 프로필 고급 설정에서 **macOS 디스플레이 모드**(표준 / 가상 디스플레이 1개 / 2개)와 **초기 표시 디스플레이**(모든 디스플레이 / 디스플레이 1 / 2)를 지정하고, 접속 중 툴바의 디스플레이 버튼으로 실시간 전환할 수 있습니다.
+- **단일 디스플레이 전용 선택 (최대 6개)**: 프로필 고급 설정에서 **macOS 디스플레이 모드**(표준 / 가상 디스플레이 1개)와 **초기 표시 디스플레이**(`디스플레이 1`~`디스플레이 6`)를 지정하고, 접속 중 툴바의 디스플레이 버튼에서 최대 6개 중 1개 모니터를 실시간으로 전환할 수 있습니다.
 
 👉 Full details: **[English Guide — Multi-Display Selection](../docs/MACOS_GUIDE.md#1-macos-multi-monitor--single-display-selection-rfb-3889)** | **[한국어 가이드 — 다중 모니터 단일 선택](../docs/MACOS_GUIDE.ko.md#1-macos-다중-모니터-서버에서-단일-디스플레이-선택-rfb-3889)**
 
@@ -73,9 +73,9 @@ Fixes broken Korean composition, dropped Hangul, `ㅁㅠㅊ` / `gksrmf` language
 1. **Profile Editor → Advanced** (`서버 프로필 편집 → 고급`):
    - **Host / Port**: Your Mac's IP/hostname and port `5900`
    - **Username / Password**: Your macOS account username and password (**Security**: `Auto` or `macOS/ARD`)
-   - **macOS Display Mode**: `High Performance: 2 Virtual Displays` (or `1 Virtual Display` / `Standard`)
-   - **Initial Display**: `Display 1` (or `Display 2` / `All Displays`)
-2. Connect and switch displays anytime from **Toolbar → Display** (`툴바 → 디스플레이`).
+   - **macOS Display Mode**: `Standard (Physical displays)` or `High Performance: 1 Virtual Display`
+   - **Initial Display**: `Display 1` – `Display 6` (single display only)
+2. Connect and switch between any single display (1–6) anytime from **Toolbar → Display** (`툴바 → 디스플레이`).
 3. Type Korean and English directly with your Android keyboard's built-in **한/영** toggle.
 
 ---

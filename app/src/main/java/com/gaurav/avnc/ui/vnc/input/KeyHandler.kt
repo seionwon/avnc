@@ -117,11 +117,42 @@ class KeyHandler(private val dispatcher: Dispatcher, prefs: AppPreferences) {
             if (emit(XKeySym.XK_BackSpace, true) && emit(XKeySym.XK_BackSpace, false))
                 sent = true
         }
-        if (text.isNotEmpty()) {
+        if (text.isEmpty()) return sent
+
+        val segment = StringBuilder()
+        fun flushSegment() {
+            if (segment.isEmpty()) return
             @Suppress("DEPRECATION")
-            if (onKeyEvent(KeyEvent(0L, text, KeyCharacterMap.VIRTUAL_KEYBOARD, 0)))
+            if (onKeyEvent(KeyEvent(0L, segment.toString(), KeyCharacterMap.VIRTUAL_KEYBOARD, 0)))
                 sent = true
+            segment.setLength(0)
         }
+
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            when (c) {
+                '\r', '\n' -> {
+                    flushSegment()
+                    if (c == '\r' && i + 1 < text.length && text[i + 1] == '\n') i++
+                    if (emit(XKeySym.XK_Return, true) && emit(XKeySym.XK_Return, false))
+                        sent = true
+                }
+                '\t' -> {
+                    flushSegment()
+                    if (emit(XKeySym.XK_Tab, true) && emit(XKeySym.XK_Tab, false))
+                        sent = true
+                }
+                '\b' -> {
+                    flushSegment()
+                    if (emit(XKeySym.XK_BackSpace, true) && emit(XKeySym.XK_BackSpace, false))
+                        sent = true
+                }
+                else -> segment.append(c)
+            }
+            i++
+        }
+        flushSegment()
         return sent
     }
 

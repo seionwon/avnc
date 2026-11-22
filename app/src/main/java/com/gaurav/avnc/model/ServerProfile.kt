@@ -12,6 +12,8 @@ import android.os.Parcelable
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import androidx.room.TypeConverters
+import com.gaurav.avnc.model.db.ProfileSecrets
 import kotlinx.parcelize.IgnoredOnParcel
 import kotlinx.parcelize.Parcelize
 import kotlinx.serialization.Serializable
@@ -55,6 +57,8 @@ data class ServerProfile(
          * Password used for authentication.
          * Note: Username & password may not be used for all security types.
          */
+        @field:TypeConverters(ProfileSecrets::class)
+        @ColumnInfo(typeAffinity = ColumnInfo.BLOB)
         var password: String = "",
 
         /**
@@ -160,19 +164,18 @@ data class ServerProfile(
 
         /**
          * macOS Screen Sharing display mode:
-         * 0 = Standard (Physical displays)
+         * 0 = Standard (Physical displays, single monitor selectable up to 6)
          * 1 = High Performance: 1 Virtual Display
-         * 2 = High Performance: 2 Virtual Displays
          */
         @ColumnInfo(defaultValue = "0")
         var appleDisplayMode: Int = APPLE_DISPLAY_STANDARD,
 
         /**
-         * Initial display to select when connecting to a multi-display macOS host:
-         * 0 = All displays, 1 = Display 1, 2 = Display 2, ...
+         * Initial single display to select when connecting to a multi-display macOS host:
+         * 1 = Display 1, 2 = Display 2, ..., 6 = Display 6 (legacy 0 normalizes to 1).
          */
         @ColumnInfo(defaultValue = "0")
-        var appleInitialDisplay: Int = APPLE_INITIAL_DISPLAY_ALL,
+        var appleInitialDisplay: Int = APPLE_INITIAL_DISPLAY_DEFAULT,
 
         /**
          * Enable Wake-on-LAN
@@ -201,7 +204,11 @@ data class ServerProfile(
         var sshPort: Int = 22,
         var sshUsername: String = "",
         var sshAuthType: Int = SSH_AUTH_KEY,
+        @field:TypeConverters(ProfileSecrets::class)
+        @ColumnInfo(typeAffinity = ColumnInfo.BLOB)
         var sshPassword: String = "",
+        @field:TypeConverters(ProfileSecrets::class)
+        @ColumnInfo(typeAffinity = ColumnInfo.BLOB)
         var sshPrivateKey: String = ""
 
 ) : Parcelable {
@@ -220,11 +227,20 @@ data class ServerProfile(
         const val VIEW_MODE_NO_INPUT = 1
         const val VIEW_MODE_NO_VIDEO = 2
 
-        // macOS Screen Sharing display modes
+        // macOS Screen Sharing display modes (single-display only, up to 6 monitors)
         const val APPLE_DISPLAY_STANDARD = 0
         const val APPLE_DISPLAY_VIRTUAL_1 = 1
-        const val APPLE_DISPLAY_VIRTUAL_2 = 2
-        const val APPLE_INITIAL_DISPLAY_ALL = 0
+        const val APPLE_INITIAL_DISPLAY_DEFAULT = 1
+        const val APPLE_MAX_DISPLAYS = 6
+
+        fun normalizeAppleDisplayMode(mode: Int): Int =
+                if (mode == APPLE_DISPLAY_STANDARD) APPLE_DISPLAY_STANDARD else APPLE_DISPLAY_VIRTUAL_1
+
+        fun normalizeAppleInitialDisplay(display: Int): Int = when {
+            display < 1 -> APPLE_INITIAL_DISPLAY_DEFAULT
+            display > APPLE_MAX_DISPLAYS -> APPLE_MAX_DISPLAYS
+            else -> display
+        }
 
         // Flag masks
         // private const val FLAG_LEGACY_KEYSYM = 0x01L
@@ -267,4 +283,23 @@ data class ServerProfile(
      * Simply checks for non-zero [ID]
      */
     fun isSaved() = (ID != 0L)
+
+    private fun connectionPort() = if (channelType == CHANNEL_TCP && port in 0..99) port + 5900 else port
+
+    fun endpointDescription(): String {
+        fun address(host: String, port: Int) = if (':' in host) "[$host]:$port" else "$host:$port"
+        return buildString {
+            append(address(host, connectionPort()))
+            if (useRepeater) append(" (ID $idOnRepeater)")
+            if (channelType == CHANNEL_SSH_TUNNEL) append(" (SSH ${address(sshHost, sshPort)})")
+        }
+    }
+
+    fun endpointKey(): String {
+        val fields = mutableListOf(channelType.toString(), host, connectionPort().toString())
+        if (channelType == CHANNEL_SSH_TUNNEL) fields.addAll(listOf(sshHost, sshPort.toString(), sshUsername))
+        if (useRepeater) fields.add(idOnRepeater.toString())
+        val encoded = fields.joinToString("") { "${it.length}:$it" }
+        return java.security.MessageDigest.getInstance("SHA-256").digest(encoded.toByteArray()).toHexString()
+    }
 }

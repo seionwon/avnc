@@ -474,13 +474,12 @@ class MacKeyboardSync(
          * - Password fields (`secureInput == true`): always KeyEvents.
          * - Whitespace / control-only (`" "`, `"\n"`, `"\t"`): always KeyEvents.
          * - Non-BMP (surrogate pairs, e.g. emoji): always PasteText (macOS 0x04 posts 16-bit UniChar).
-         * - macOS confirmed on a non-IME keylayout (`com.apple.keylayout.ABC` / `US`,
-         *   `remoteSource != null && !remoteSource.isInputMethod`): direct 0x04 KeyEvents
-         *   (`0x01000000 | codepoint`) deliver BOTH English and Hangul BMP cleanly with zero
-         *   clipboard latency or Cmd+V races.
-         * - macOS currently in an Input Method (`remoteSource.isInputMethod == true`, e.g.
-         *   `2SetKorean`) or `remoteSource == null` (1109 not yet received): atomic PasteText
-         *   so macOS TSM never drops Hangul or turns English into Korean jamo (`ㅁㅠㅊ`).
+         * - macOS confirmed on a non-IME keylayout (`com.apple.keylayout.ABC` / `US`) or
+         *   unreported (`remoteSource == null`): direct 0x04 KeyEvents (`0x01000000 | codepoint`)
+         *   deliver BOTH English and Hangul BMP cleanly with zero clipboard latency or Cmd+V races.
+         * - macOS confirmed in an Input Method (`remoteSource != null && remoteSource.isInputMethod`,
+         *   e.g. `2SetKorean`): atomic PasteText so macOS TSM never drops Hangul or turns English
+         *   into Korean jamo (`ㅁㅠㅊ`) while MacKeyboardSync switches macOS back to ABC/US.
          */
         fun shouldUsePasteText(text: String, remoteSource: RemoteKeyboardSource?): Boolean {
             if (text.isEmpty()) return false
@@ -494,7 +493,7 @@ class MacKeyboardSync(
                 }
             }
             if (onlyWhitespaceControl) return false
-            return remoteSource == null || remoteSource.isInputMethod
+            return remoteSource != null && remoteSource.isInputMethod
         }
     }
 }

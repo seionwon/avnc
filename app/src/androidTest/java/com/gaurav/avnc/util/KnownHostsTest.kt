@@ -10,6 +10,7 @@ package com.gaurav.avnc.util
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.gaurav.avnc.targetContext
+import com.gaurav.avnc.model.ServerProfile
 import org.junit.Assert
 import org.junit.Before
 import org.junit.Test
@@ -27,9 +28,12 @@ class KnownHostsTest {
 
     @Test
     fun simpleTrustTest() {
-        Assert.assertFalse(isCertificateTrusted(targetContext, getTestCert()))
-        trustCertificate(targetContext, getTestCert())
-        Assert.assertTrue(isCertificateTrusted(targetContext, getTestCert()))
+        val profile = ServerProfile(host = "example.com")
+        val cert = getTestCert()
+        Assert.assertEquals(CertificateTrust.Unknown, certificateTrust(targetContext, profile, cert))
+        Assert.assertTrue(trustCertificate(targetContext, profile, cert))
+        Assert.assertEquals(CertificateTrust.Trusted, certificateTrust(targetContext, profile, cert))
+        Assert.assertEquals(CertificateTrust.Unknown, certificateTrust(targetContext, profile.copy(port = 5901), cert))
     }
 
 

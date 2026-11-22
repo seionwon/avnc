@@ -25,21 +25,20 @@ Standard LibVNCClient speaks plain RFB `3.8` and cannot negotiate Apple's propri
    - **Security**: `Auto` (recommended) or `macOS / ARD` (type `30`).
    - **Username / Password**: Your macOS login account credentials (Apple account auth is required to activate RFB `3.889` display features; VNC-password-only connections automatically fall back to standard LibVNCClient).
    - **macOS Display Mode**:
-     - `Standard (Physical Displays)` — Uses physical monitors attached to the Mac.
-     - `High Performance: 1 Virtual Display` — Requests 1 virtual display (`0x1d`).
-     - `High Performance: 2 Virtual Displays` — Requests 2 virtual displays (`0x1d`), matching Apple Screen Sharing's default High Performance dual-virtual-display setup.
+     - `Standard (Physical Displays)` — Uses physical monitors attached to the Mac (supports up to 6 monitors; single monitor selected at a time).
+     - `High Performance: 1 Virtual Display` — Requests a single virtual display (`0x1d`).
    - **Initial Display**:
-     - `All Displays`, `Display 1`, `Display 2`, … — Automatically switches to the selected display right after connecting (`0x0d`).
+     - `Display 1` through `Display 6` — Automatically selects that single display right after connecting (`0x0d`), never showing a combined multi-monitor screen.
 3. **Switch Displays Live**:
    - While connected, open the viewer **Toolbar** and tap the **Display** button (`ic_displays`).
-   - Choose **All Displays**, **Display 1**, **Display 2**, etc. (displays are labeled with their resolution and `Main` / `Virtual` badges).
+   - Choose any single display from **Display 1** through **Display 6** (labeled with each display's resolution).
 4. **`vnc://` URI Support**:
-   - Profiles exported or opened via URI also preserve `AppleDisplayMode` (`0` = Standard, `1` = 1 Virtual Display, `2` = 2 Virtual Displays) and `AppleInitialDisplay` (`0` = All, `1` = Display 1, `2` = Display 2, …).
+   - Profiles exported or opened via URI also preserve `AppleDisplayMode` (`0` = Standard, `1` = 1 Virtual Display) and `AppleInitialDisplay` (`1`–`6`).
 
 ### Multiple Simultaneous Clients on the Same Mac
 When two VNC clients connect to the same macOS host at once:
 - macOS `screensharingd` shares **one desktop session** (active window focus, text input prompt, and cursor) across connected viewers.
-- Each client independently chooses **which display to view** (`Display 1`, `Display 2`, or `All Displays`).
+- Each client independently chooses **which single display to view** (`Display 1`–`Display 6`).
 - If both clients select the same display (e.g., both on `Display 1`), both screens stay synchronized in real time.
 
 ### Architecture & Wire Protocol (`AppleRfb.h` / `AppleRfb.cpp`)
@@ -47,9 +46,9 @@ When two VNC clients connect to the same macOS host at once:
 - **Authentication & Encrypted Record Layer**:
   - Supports Apple **Direct SRP (36)**, **RSA-SRP / RSA1-Plain (33)**, and **Apple DH (30)** (plus NoAuth `1` for local mock testing), built with OpenSSL 3 / LibreSSL and zero C++ STL (`-DANDROID_STL=none`).
   - Negotiates `ViewerInfo (0x21)`, `SetMode (0x0a)`, `AutoPasteboard (0x15)`, `SetEncryption (0x12)`, and `1103 (0x44f) Rekey` to establish Apple's AES-128-CBC + SHA-1 sequence-tagged record layer.
-- **Virtual Displays & Display Selection**:
-  - Sends `0x1d` (`SetDisplayConfiguration`) before `SetEncodings` when 1 or 2 Virtual Displays are requested, clamped to the server's advertised `maxVirtualDisplays` (`serverFlags >> 5`).
-  - Parses server `1105 (0x451) DisplayLayout` rectangles (framebuffer size, active `currentDisplayId`, logical/backing bounds, density, `scale`, and display flags), resizes the framebuffer, updates `VncViewModel.remoteDisplays`, and auto-applies `initialDisplayIndex` via `0x0d` (`SetDisplay`).
+- **Single Virtual Display & Up-to-6 Display Selection**:
+  - Sends `0x1d` (`SetDisplayConfiguration`, `display_count = 1`) before `SetEncodings` when `1 Virtual Display` is requested.
+  - Parses server `1105 (0x451) DisplayLayout` rectangles (framebuffer size, active `currentDisplayId`, logical/backing bounds, density, `scale`, and display flags), exposes up to **6 selectable displays**, and automatically selects the configured single display (`1..6`, falling back to `Display 1`) via `0x0d` (`SetDisplay`).
 - **Database Migration**: Room `MainDb` migrated from schema `v7` → `v8` ([`8.json`](../app/roomSchema/com.gaurav.avnc.model.db.MainDb/8.json)) adding `appleDisplayMode` and `appleInitialDisplay` with default `0`.
 
 ---

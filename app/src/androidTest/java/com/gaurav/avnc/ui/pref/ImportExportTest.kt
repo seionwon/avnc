@@ -136,6 +136,20 @@ class ImportExportTest {
 
     @Test
     @SdkSuppress(minSdkVersion = 28)
+    fun secretExportRequiresAvailableDeviceAuthentication() {
+        BiometricMocking.start(isAuthAvailable = false)
+        try {
+            onView(withText(R.string.title_export_passwords_and_keys)).doClick()
+            onView(withText(R.string.title_export)).doClick()
+            onView(withText(R.string.err_device_auth_unavailable)).checkWillBeDisplayed()
+            Intents.assertNoUnverifiedIntents()
+        } finally {
+            BiometricMocking.end()
+        }
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 28)
     fun exportFailsOnIncorrectBiometric() {
         BiometricMocking.start()
         onView(withText(R.string.title_export_passwords_and_keys)).doClick()

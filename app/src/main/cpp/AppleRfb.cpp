@@ -7,6 +7,7 @@
  */
 
 #include "AppleRfb.h"
+#include "FramebufferLimits.h"
 
 #include <errno.h>
 #include <math.h>
@@ -67,7 +68,6 @@ static const size_t kRecordMaxSize      = 65520;
 static const size_t kRecordMaxBody      = kRecordMaxSize - 2 - kRecordChecksumSize;
 static const size_t kRekeyBodySize      = 36;
 static const size_t kMaxCompressedRect  = 64u * 1024u * 1024u;
-static const size_t kMaxInflatedRect    = 128u * 1024u * 1024u;
 static const size_t kMaxCursorSize      = 1024;
 static const size_t kMaxCursorCache     = 64;
 
@@ -77,7 +77,9 @@ static const uint32_t kDefaultUpdateIntervalUs = 16667u; // ~60 fps
 static const uint16_t kMacKeyboardTypeAnsi    = 40;
 static const uint8_t  kMacKeyFlagKeyCodeValid = 0x01u;
 static const uint8_t  kMacKeyFlagPreferCode   = 0x02u;
+static const uint16_t kMacKeyCodeV            = 9;
 static const uint16_t kMacKeyCodeSpace        = 49;
+static const uint16_t kMacKeyCodeCommand      = 55;
 static const uint16_t kMacKeyCodeControl      = 59;
 static const uint32_t kKeySymVoid             = 0x00ffffffu;
 static const size_t   kMaxSavedClipboardBytes = 256u * 1024u;
@@ -228,11 +230,19 @@ static bool zlibDecoderInflate(ZlibDecoder *d, const uint8_t *in, size_t inLen,
     size_t total = 0;
 
     while (true) {
-        if (total == d->outCap) {
-            if (d->outCap >= expectedOrMax) {
+        if (total == expectedOrMax || total == d->outCap) {
+            if (total == expectedOrMax) {
                 if (d->zs.avail_in == 0)
                     break;
-                return false;
+                // A flush marker may still follow the final pixel byte.
+                Bytef extra;
+                d->zs.next_out = &extra;
+                d->zs.avail_out = 1;
+                uInt before = d->zs.avail_in;
+                int rc = inflate(&d->zs, Z_SYNC_FLUSH);
+                if (d->zs.avail_out == 0 || d->zs.avail_in == before ||
+                    (rc != Z_OK && rc != Z_BUF_ERROR && rc != Z_STREAM_END)) return false;
+                continue;
             }
             size_t newCap = d->outCap * 2;
             if (newCap > expectedOrMax) newCap = expectedOrMax;
@@ -242,9 +252,10 @@ static bool zlibDecoderInflate(ZlibDecoder *d, const uint8_t *in, size_t inLen,
             d->outCap = newCap;
         }
         d->zs.next_out = d->outBuf + total;
-        d->zs.avail_out = (uInt) (d->outCap - total);
+        size_t limit = d->outCap < expectedOrMax ? d->outCap : expectedOrMax;
+        d->zs.avail_out = (uInt) (limit - total);
         int rc = inflate(&d->zs, Z_SYNC_FLUSH);
-        total = d->outCap - d->zs.avail_out;
+        total = limit - d->zs.avail_out;
         if (rc == Z_STREAM_END) {
             break;
         }
@@ -823,7 +834,7 @@ bool appleRfbBuildVirtualDisplayMessage(int displayCount, int logicalWidth, int 
                                         double refreshRate, bool hdr,
                                         uint8_t *out, size_t outCap, size_t *outLen) {
     if (!out || !outLen) return false;
-    if (displayCount < 1 || displayCount > 2) return false;
+    if (displayCount != 1) return false;
     if (logicalWidth <= 0 || logicalHeight <= 0) return false;
     if (density != 1.0 && density != 2.0) density = 1.0;
     if (refreshRate <= 0.0) refreshRate = 60.0;
@@ -1253,6 +1264,31 @@ static bool readSecurityResult(AppleRfbClient *c, uint32_t *resultOut) {
 typedef bool (*SrpReadFn)(AppleRfbClient *c, uint8_t **outBuf, size_t *outLen);
 typedef bool (*SrpWriteFn)(AppleRfbClient *c, const uint8_t *fields, size_t fieldsLen);
 
+static bool isKnownSrpGroup(const uint8_t *modulus, size_t length, const BIGNUM *n, const BIGNUM *g) {
+    // RFC 5054, Appendix A. The groups of 3072 bits and above use the RFC 3526 primes.
+    if (length == 256) {
+        static const uint8_t rfc5054Sha256[32] = {
+            0x91,0xb7,0x1d,0x6b,0x40,0xd4,0x39,0x95,0x45,0x68,0xd4,0x12,0xe8,0x83,0xde,0x51,
+            0x86,0xf9,0x38,0x1e,0x25,0xae,0xf3,0x6e,0x7a,0x46,0x07,0x72,0x2f,0x7e,0x15,0xca
+        };
+        uint8_t hash[32];
+        return BN_is_word(g, 2) && computeDigest(EVP_sha256(), modulus, length, hash, sizeof(hash)) &&
+               memcmp(hash, rfc5054Sha256, sizeof(hash)) == 0;
+    }
+    if (!BN_is_word(g, length == 1024 ? 19 : 5)) return false;
+    BIGNUM *standard;
+    switch (length) {
+        case 384:  standard = BN_get_rfc3526_prime_3072(nullptr); break;
+        case 512:  standard = BN_get_rfc3526_prime_4096(nullptr); break;
+        case 768:  standard = BN_get_rfc3526_prime_6144(nullptr); break;
+        case 1024: standard = BN_get_rfc3526_prime_8192(nullptr); break;
+        default: return false;
+    }
+    bool matches = standard && BN_cmp(n, standard) == 0;
+    BN_free(standard);
+    return matches;
+}
+
 static bool runSrpExchange(AppleRfbClient *c, const char *password,
                            SrpReadFn readMsg, SrpWriteFn writeMsg,
                            uint8_t wrapKeyOut[16]) {
@@ -1275,7 +1311,7 @@ static bool runSrpExchange(AppleRfbClient *c, const char *password,
     BIGNUM *bnN = nullptr, *bnG = nullptr, *bnB = nullptr;
     BIGNUM *bnX = nullptr, *bnK = nullptr, *bnA = nullptr, *bnPubA = nullptr;
     BIGNUM *bnU = nullptr, *bnGx = nullptr, *bnKgx = nullptr, *bnBase = nullptr;
-    BIGNUM *bnExp = nullptr, *bnS = nullptr, *bnModCheck = nullptr;
+    BIGNUM *bnExp = nullptr, *bnS = nullptr;
     BN_CTX *bnCtx = nullptr;
 
     uint8_t *gPad = nullptr, *aPad = nullptr, *bPad = nullptr, *sPad = nullptr;
@@ -1310,7 +1346,8 @@ static bool runSrpExchange(AppleRfbClient *c, const char *password,
     optLen = be16(p);
     if (!(options = take(optLen))) goto cleanup;
 
-    if (modLen < 256 || modLen > 1024 || genLen == 0 || iterations == 0 || iterations > 10000000ULL) {
+    if (modLen < 256 || modLen > 1024 || genLen == 0 || genLen > modLen ||
+        srvPubLen == 0 || srvPubLen > modLen || saltLen == 0 || iterations == 0 || iterations > 10000000ULL) {
         logErr(c, "AppleRfb: invalid SRP parameters (mod=%u, iter=%llu)",
                (unsigned) modLen, (unsigned long long) iterations);
         c->lastErrno = EPROTO;
@@ -1321,10 +1358,9 @@ static bool runSrpExchange(AppleRfbClient *c, const char *password,
     bnN = BN_bin2bn(modBytes, modLen, nullptr);
     bnG = BN_bin2bn(genBytes, genLen, nullptr);
     bnB = BN_bin2bn(srvPubBytes, srvPubLen, nullptr);
-    bnModCheck = BN_new();
-    if (!bnCtx || !bnN || !bnG || !bnB || !bnModCheck) goto cleanup;
+    if (!bnCtx || !bnN || !bnG || !bnB) goto cleanup;
 
-    if (BN_mod(bnModCheck, bnB, bnN, bnCtx) != 1 || BN_is_zero(bnModCheck)) {
+    if (!isKnownSrpGroup(modBytes, modLen, bnN, bnG) || BN_cmp(bnB, bnN) >= 0 || BN_is_zero(bnB)) {
         c->lastErrno = EPROTO;
         goto cleanup;
     }
@@ -1464,7 +1500,6 @@ cleanup:
     BN_free(bnBase);
     BN_free(bnExp);
     BN_free(bnS);
-    BN_free(bnModCheck);
     BN_CTX_free(bnCtx);
     return ok;
 }
@@ -1923,7 +1958,11 @@ static bool handleSessionSelection(AppleRfbClient *c, const char *username, cons
  *****************************************************************************/
 
 static bool resizeFramebuffer(AppleRfbClient *c, int width, int height) {
-    if (width <= 0 || height <= 0) return true;
+    size_t size;
+    if (!framebufferByteCount(width, height, 4, &size)) {
+        c->lastErrno = EOVERFLOW;
+        return false;
+    }
     if (c->fb && c->fbWidth == width && c->fbHeight == height) return true;
 
     uint8_t *newFb = c->cbs.resizeFramebuffer(c->userCtx, width, height);
@@ -2345,15 +2384,21 @@ static bool handleDisplayLayout(AppleRfbClient *c) {
         c->cbs.onDisplaysChanged(c->userCtx, &layout, supportsSel);
     }
 
-    // Apply profile's initial display selection (e.g., "Display 1") once layout arrives
-    if (c->running && !c->initialDisplayApplied &&
-        c->config.initialDisplayIndex > 0 && supportsSel &&
-        layout.count >= c->config.initialDisplayIndex) {
+    // Auto-select a single display (1 of up to 6) whenever the host exposes multiple displays
+    // so the viewer never stays on a combined multi-monitor framebuffer.
+    if (c->running && !c->initialDisplayApplied && supportsSel && layout.count > 1) {
+        int selectableCount = (layout.count > APPLE_MAX_SELECTABLE_DISPLAYS)
+                              ? APPLE_MAX_SELECTABLE_DISPLAYS
+                              : (int) layout.count;
+        int requestedIndex = c->config.initialDisplayIndex;
+        if (requestedIndex < 1 || requestedIndex > selectableCount) {
+            requestedIndex = 1;
+        }
         c->initialDisplayApplied = true;
-        uint32_t targetId = layout.displays[c->config.initialDisplayIndex - 1].id;
+        uint32_t targetId = layout.displays[requestedIndex - 1].id;
         if (targetId != 0 && layout.currentDisplayId != targetId) {
-            logInfo(c, "AppleRfb: auto-selecting initial display #%d (id=0x%x)",
-                    c->config.initialDisplayIndex, targetId);
+            logInfo(c, "AppleRfb: auto-selecting single display #%d (id=0x%x)",
+                    requestedIndex, targetId);
             if (!appleRfbSelectDisplay(c, targetId))
                 return false;
         }
@@ -2440,25 +2485,35 @@ static bool handleFramebufferUpdate(AppleRfbClient *c) {
         if (enc == kEncLastRect)
             break;
 
+        size_t pixelBytes = 0;
+        if (enc == kEncRaw || enc == kEncZlib || enc == kEncAppleThousands ||
+            enc == kEncZRLE || enc == kEncCopyRect) {
+            if (rx + rw > c->fbWidth || ry + rhgt > c->fbHeight ||
+                !framebufferByteCount(rw, rhgt, enc == kEncAppleThousands ? 2 : 4, &pixelBytes)) {
+                c->lastErrno = EPROTO;
+                return false;
+            }
+        }
+
+        auto notePixels = [&] {
+            hadPixels = true;
+            if (c->cbs.onFramebufferRect)
+                c->cbs.onFramebufferRect(c->userCtx, ry, rhgt);
+        };
         switch (enc) {
             case kEncRaw: {
-                size_t byteCount = (size_t) rw * (size_t) rhgt * 4u;
-                if (byteCount > kMaxInflatedRect) {
-                    c->lastErrno = EPROTO;
-                    return false;
-                }
-                uint8_t *buf = ensureScratch(c, byteCount > 0 ? byteCount : 1);
+                uint8_t *buf = ensureScratch(c, pixelBytes);
                 if (!buf) return false;
-                if (byteCount > 0 && !streamReadExact(c, buf, byteCount)) return false;
+                if (!streamReadExact(c, buf, pixelBytes)) return false;
                 blitBgra(c, rx, ry, rw, rhgt, buf);
-                hadPixels = true;
+                notePixels();
                 break;
             }
             case kEncCopyRect: {
                 uint8_t pos[4];
                 if (!streamReadExact(c, pos, 4)) return false;
                 blitCopyRect(c, rx, ry, be16(pos), be16(pos + 2), rw, rhgt);
-                hadPixels = true;
+                notePixels();
                 break;
             }
             case kEncZlib: {
@@ -2471,16 +2526,15 @@ static bool handleFramebufferUpdate(AppleRfbClient *c) {
                 if (!comp) return false;
                 if (compLen > 0 && !streamReadExact(c, comp, compLen)) return false;
 
-                size_t expected = (size_t) rw * (size_t) rhgt * 4u;
                 uint8_t *raw = nullptr;
                 size_t rawLen = 0;
-                if (!zlibDecoderInflate(&c->zlibDec, comp, compLen, expected, true, &raw, &rawLen)) {
+                if (!zlibDecoderInflate(&c->zlibDec, comp, compLen, pixelBytes, true, &raw, &rawLen)) {
                     logErr(c, "AppleRfb: Zlib inflate failed");
                     c->lastErrno = EPROTO;
                     return false;
                 }
                 blitBgra(c, rx, ry, rw, rhgt, raw);
-                hadPixels = true;
+                notePixels();
                 break;
             }
             case kEncAppleThousands: {
@@ -2493,16 +2547,15 @@ static bool handleFramebufferUpdate(AppleRfbClient *c) {
                 if (!comp) return false;
                 if (compLen > 0 && !streamReadExact(c, comp, compLen)) return false;
 
-                size_t expected = (size_t) rw * (size_t) rhgt * 2u;
                 uint8_t *raw = nullptr;
                 size_t rawLen = 0;
-                if (!zlibDecoderInflate(&c->thousandsDec, comp, compLen, expected, true, &raw, &rawLen)) {
+                if (!zlibDecoderInflate(&c->thousandsDec, comp, compLen, pixelBytes, true, &raw, &rawLen)) {
                     logErr(c, "AppleRfb: AppleThousands inflate failed");
                     c->lastErrno = EPROTO;
                     return false;
                 }
                 blitAppleThousands(c, rx, ry, rw, rhgt, raw);
-                hadPixels = true;
+                notePixels();
                 break;
             }
             case kEncZRLE: {
@@ -2517,7 +2570,10 @@ static bool handleFramebufferUpdate(AppleRfbClient *c) {
 
                 uint8_t *raw = nullptr;
                 size_t rawLen = 0;
-                if (!zlibDecoderInflate(&c->zrleDec, comp, compLen, kMaxInflatedRect, false, &raw, &rawLen)) {
+                size_t tiles = ((rw + 63u) / 64u) * ((rhgt + 63u) / 64u);
+                size_t limit = pixelBytes + tiles * (1u + 127u * 3u);
+                if (limit > kMaxFramebufferBytes) limit = kMaxFramebufferBytes;
+                if (!zlibDecoderInflate(&c->zrleDec, comp, compLen, limit, false, &raw, &rawLen)) {
                     logErr(c, "AppleRfb: ZRLE inflate failed");
                     c->lastErrno = EPROTO;
                     return false;
@@ -2527,7 +2583,7 @@ static bool handleFramebufferUpdate(AppleRfbClient *c) {
                     c->lastErrno = EPROTO;
                     return false;
                 }
-                hadPixels = true;
+                notePixels();
                 break;
             }
             case kEncDesktopSize: {
@@ -3105,6 +3161,11 @@ AppleRfbConnectResult appleRfbConnect(int sock, const AppleRfbConfig *config,
         }
     } else {
         // 3. Get macOS credentials
+        if (!has36 && !config->authenticatedTunnel) {
+            if (outErrno) *outErrno = EPROTONOSUPPORT;
+            appleRfbDestroy(c);
+            return APPLE_RFB_ERROR;
+        }
         if (!c->cbs.getCredential ||
             !c->cbs.getCredential(c->userCtx, username, sizeof(username), password, sizeof(password))) {
             if (outErrno) *outErrno = EACCES;
@@ -3254,13 +3315,9 @@ AppleRfbConnectResult appleRfbConnect(int sock, const AppleRfbConfig *config,
         if (!streamWrite(c, spf, sizeof(spf))) goto io_error;
     }
 
-    // 10. Optional SetDisplayConfiguration (0x1d) for 1 or 2 Virtual Displays
+    // 10. Optional SetDisplayConfiguration (0x1d) for a single Virtual Display
     if (c->config.displayMode != APPLE_DISPLAY_STANDARD && serverAccepts(c, 0x1d)) {
-        int requested = (c->config.displayMode == APPLE_DISPLAY_VIRTUAL_2) ? 2 : 1;
-        int maxVirt = appleRfbMaxVirtualDisplays(c);
-        if (maxVirt > 0 && requested > maxVirt) {
-            requested = maxVirt;
-        }
+        int requested = 1;
         double density = (c->config.virtualDensity == 2.0) ? 2.0 : 1.0;
         uint8_t vdMsg[512];
         size_t vdLen = 0;
@@ -3271,7 +3328,7 @@ AppleRfbConnectResult appleRfbConnect(int sock, const AppleRfbConfig *config,
                                                3840, 2160,
                                                60.0, false,
                                                vdMsg, sizeof(vdMsg), &vdLen)) {
-            logInfo(c, "AppleRfb: requesting %d virtual display(s) (%dx%d @ %.0fx)",
+            logInfo(c, "AppleRfb: requesting %d virtual display (%dx%d @ %.0fx)",
                     requested, c->virtualLogicalWidth, c->virtualLogicalHeight, density);
             if (!streamWrite(c, vdMsg, vdLen)) goto io_error;
             c->activeVirtualDisplays = requested;
@@ -3317,15 +3374,20 @@ AppleRfbConnectResult appleRfbConnect(int sock, const AppleRfbConfig *config,
     c->lastPixelUpdateMs = nowMonotonicMs();
     c->lastWatchdogReqMs = 0;
 
-    // If a DisplayLayout already arrived during rekey before running=true, apply initial display
-    // or re-arm framebuffer updates for the actual DisplayLayout dimensions now.
+    // If a DisplayLayout already arrived during rekey before running=true, apply single-display
+    // selection (1 of up to 6) or re-arm framebuffer updates for the actual DisplayLayout dimensions now.
     {
         bool sentInitialSelect = false;
-        if (c->hasLayout && !c->initialDisplayApplied &&
-            c->config.initialDisplayIndex > 0 && serverAccepts(c, 0x0d) &&
-            c->layout.count >= c->config.initialDisplayIndex) {
+        if (c->hasLayout && !c->initialDisplayApplied && serverAccepts(c, 0x0d) && c->layout.count > 1) {
+            int selectableCount = (c->layout.count > APPLE_MAX_SELECTABLE_DISPLAYS)
+                                  ? APPLE_MAX_SELECTABLE_DISPLAYS
+                                  : (int) c->layout.count;
+            int requestedIndex = c->config.initialDisplayIndex;
+            if (requestedIndex < 1 || requestedIndex > selectableCount) {
+                requestedIndex = 1;
+            }
             c->initialDisplayApplied = true;
-            uint32_t targetId = c->layout.displays[c->config.initialDisplayIndex - 1].id;
+            uint32_t targetId = c->layout.displays[requestedIndex - 1].id;
             if (targetId != 0 && c->layout.currentDisplayId != targetId) {
                 if (appleRfbSelectDisplay(c, targetId)) {
                     sentInitialSelect = true;
@@ -3750,38 +3812,44 @@ bool appleRfbPasteText(AppleRfbClient *c, const char *utf8, int len) {
     if (!buildUtf8PasteboardArchive(utf8, (size_t) len, true, &archive, &archLen))
         return false;
 
-    uint8_t *comp = nullptr;
-    size_t compLen = 0;
-    bool compOk = deflateOneShot(archive, archLen, &comp, &compLen);
+    bool sentClip = sendApplePasteboardArchive(c, archive, archLen);
     free(archive);
-    if (!compOk)
+    if (!sentClip)
         return false;
 
-    // Pack 0x1f transient pasteboard + 0x04 Cmd+V (Super_L + 'v') into ONE atomic
-    // streamWrite so screensharingd processes SetPasteboard and Cmd+V strictly in order.
-    const size_t keyEventsSize = 32u; // 4 x 8-byte 0x04 KeyEvent
-    size_t total = 16u + compLen + keyEventsSize;
-    uint8_t *msg = (uint8_t *) malloc(total);
-    if (!msg) {
-        free(comp);
-        return false;
+    // Allow screensharingd -> ScreensharingAgent -> pboard IPC to commit the
+    // transient pasteboard item before injecting Cmd+V.
+    usleep(15000);
+
+    uint8_t keyCopy[16];
+    bool hasKey = false;
+    if (serverAccepts(c, 0x10)) {
+        pthread_mutex_lock(&c->writeMutex);
+        hasKey = c->hasWrapKey;
+        if (hasKey) memcpy(keyCopy, c->wrapKey, sizeof(keyCopy));
+        pthread_mutex_unlock(&c->writeMutex);
     }
 
-    memset(msg, 0, 16);
-    msg[0] = 0x1f;
-    putBe32(msg + 4, 0u); // echo = 0
-    putBe32(msg + 8, (uint32_t) archLen);
-    putBe32(msg + 12, (uint32_t) compLen);
-    memcpy(msg + 16, comp, compLen);
-    free(comp);
+    // Prefer layout-independent physical Command(55) + V(9) via 0x10 EncryptedKey so
+    // Cmd+V works reliably even when macOS is currently in a Korean/CJK Input Method.
+    if (hasKey) {
+        uint8_t encBatch[72];
+        if (appleRfbBuildEncryptedKeyMessage(keyCopy, kMacKeyCodeCommand, 0xffebu, true,  encBatch + 0) &&
+            appleRfbBuildEncryptedKeyMessage(keyCopy, kMacKeyCodeV,       0x0076u, true,  encBatch + 18) &&
+            appleRfbBuildEncryptedKeyMessage(keyCopy, kMacKeyCodeV,       0x0076u, false, encBatch + 36) &&
+            appleRfbBuildEncryptedKeyMessage(keyCopy, kMacKeyCodeCommand, 0xffebu, false, encBatch + 54)) {
+            return streamWrite(c, encBatch, sizeof(encBatch));
+        }
+    }
 
-    size_t o = 16u + compLen;
+    uint8_t keyBatch[32];
+    size_t o = 0;
     auto putKey04 = [&](bool down, uint32_t sym) {
-        msg[o + 0] = 0x04;
-        msg[o + 1] = down ? 1u : 0u;
-        msg[o + 2] = 0;
-        msg[o + 3] = 0;
-        putBe32(msg + o + 4, sym);
+        keyBatch[o + 0] = 0x04;
+        keyBatch[o + 1] = down ? 1u : 0u;
+        keyBatch[o + 2] = 0;
+        keyBatch[o + 3] = 0;
+        putBe32(keyBatch + o + 4, sym);
         o += 8u;
     };
     putKey04(true,  0xffebu); // XK_Super_L (Command) down
@@ -3789,15 +3857,7 @@ bool appleRfbPasteText(AppleRfbClient *c, const char *utf8, int len) {
     putKey04(false, 0x0076u); // 'v' up
     putKey04(false, 0xffebu); // XK_Super_L (Command) up
 
-    if (c->clipMutexInit) {
-        pthread_mutex_lock(&c->clipMutex);
-        c->ownPasteboardEchoUntilMs = nowMonotonicMs() + kPasteboardEchoSupprMs;
-        pthread_mutex_unlock(&c->clipMutex);
-    }
-
-    bool ok = streamWrite(c, msg, total);
-    free(msg);
-    return ok;
+    return streamWrite(c, keyBatch, sizeof(keyBatch));
 }
 
 bool appleRfbRestoreClipboard(AppleRfbClient *c) {
@@ -3827,6 +3887,9 @@ bool appleRfbRestoreClipboard(AppleRfbClient *c) {
 
 bool appleRfbSelectDisplay(AppleRfbClient *c, uint32_t displayId) {
     if (!c || !serverAccepts(c, 0x0d))
+        return false;
+    // Enforce single-display selection only (never select combined All Displays).
+    if (displayId == 0u || displayId == APPLE_ALL_DISPLAYS_WIRE)
         return false;
 
     uint8_t msg[8];

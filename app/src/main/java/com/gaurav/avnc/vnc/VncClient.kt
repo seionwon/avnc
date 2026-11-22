@@ -102,6 +102,7 @@ class VncClient(private val observer: Observer) {
     /**
      * Cursor info, used by Renderer
      */
+    @Volatile
     var cursorInfo = CursorInfo()
 
     /**
@@ -158,12 +159,18 @@ class VncClient(private val observer: Observer) {
     /**
      * Initializes VNC connection.
      */
-    fun connect(host: String, port: Int) {
+    fun connect(host: String, port: Int, certificateHost: String = host, authenticatedTunnel: Boolean = false) {
         stateLock.read {
             check(!connected) { "Already connected" }
             check(!destroyed) { "Client has been destroyed" }
 
-            if (!nativeInit(nativePtr, host, port))
+            val name = certificateHost.removeSurrounding("[", "]")
+            val expectedHost = try {
+                if (':' in name) name.substringBefore('%') else java.net.IDN.toASCII(name)
+            } catch (e: IllegalArgumentException) {
+                throw IOException("Invalid server hostname", e)
+            }
+            if (!nativeInit(nativePtr, host, port, expectedHost, authenticatedTunnel))
                 throw IOException(nativeGetLastErrorStr())
         }
         stateLock.write {
@@ -268,11 +275,13 @@ class VncClient(private val observer: Observer) {
     }
 
     /**
-     * Select a remote display by ID (or [RemoteDisplayState.ALL_DISPLAYS] to show all displays).
+     * Select a single remote display by ID (1 of up to 6 displays).
      * Supported on macOS Screen Sharing servers (RFB 3.889).
      */
     fun selectDisplay(displayId: Long) = ifConnected {
-        nativeSelectDisplay(nativePtr, displayId)
+        if (displayId != RemoteDisplayState.ALL_DISPLAYS && displayId != 0L) {
+            nativeSelectDisplay(nativePtr, displayId)
+        }
     }
 
     fun selectKeyboardSource(sourceId: String, clearAfter: Boolean = true) = ifConnectedAndInteractive {
@@ -333,18 +342,20 @@ class VncClient(private val observer: Observer) {
 
 
     /**
-     * Puts framebuffer contents in currently active OpenGL texture.
-     * Must be called from an OpenGL ES context (i.e. from renderer thread).
+     * Updates the bound GL texture from the revision it holds. A new texture starts at zero.
+     * Returns the uploaded revision, or zero if the texture needs initializing on the next draw.
      */
-    fun uploadFrameTexture() = ifConnected {
-        nativeUploadFrameTexture(nativePtr)
+    fun uploadFrameTexture(uploadedRevision: Long = 0L): Long {
+        ifConnected { return nativeUploadFrameTexture(nativePtr, uploadedRevision) }
+        return 0L
     }
 
     /**
      * Upload cursor contents in currently active OpenGL texture
      */
-    fun uploadCursorTexture() = ifConnected {
-        nativeUploadCursorTexture(nativePtr)
+    fun uploadCursorTexture(): Boolean {
+        ifConnected { return nativeUploadCursorTexture(nativePtr) }
+        return false
     }
 
     /**
@@ -401,7 +412,7 @@ class VncClient(private val observer: Observer) {
     private external fun nativeClientCreate(): Long
     private external fun nativeConfigure(clientPtr: Long, securityType: Int, useLocalCursor: Boolean, imageQuality: Int, useRawEncoding: Boolean)
     private external fun nativeConfigureAppleDisplay(clientPtr: Long, displayMode: Int, initialDisplay: Int)
-    private external fun nativeInit(clientPtr: Long, host: String, port: Int): Boolean
+    private external fun nativeInit(clientPtr: Long, host: String, port: Int, certificateHost: String, authenticatedTunnel: Boolean): Boolean
     private external fun nativeSetDest(clientPtr: Long, host: String, port: Int)
     private external fun nativeProcessServerMessage(clientPtr: Long): Boolean
     private external fun nativeSendKeyEvent(clientPtr: Long, keySym: Int, xtCode: Int, isDown: Boolean): Boolean
@@ -424,8 +435,8 @@ class VncClient(private val observer: Observer) {
     private external fun nativeGetWidth(clientPtr: Long): Int
     private external fun nativeGetHeight(clientPtr: Long): Int
     private external fun nativeIsEncrypted(clientPtr: Long): Boolean
-    private external fun nativeUploadFrameTexture(clientPtr: Long)
-    private external fun nativeUploadCursorTexture(clientPtr: Long)
+    private external fun nativeUploadFrameTexture(clientPtr: Long, uploadedRevision: Long): Long
+    private external fun nativeUploadCursorTexture(clientPtr: Long): Boolean
     private external fun nativeGetLastErrorStr(): String
     private external fun nativeCleanup(clientPtr: Long)
 

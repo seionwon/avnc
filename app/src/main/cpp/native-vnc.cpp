@@ -9,10 +9,13 @@
 #include <jni.h>
 #include <GLES2/gl2.h>
 #include <rfb/rfbclient.h>
+#include <openssl/x509v3.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 
 #include "AppleRfb.h"
 #include "ClientEx.h"
+#include "FramebufferLimits.h"
 #include "Utility.h"
 
 
@@ -101,14 +104,7 @@ static char *onGetPassword(rfbClient *client) {
     return getNativeStrCopy(env, jPassword);
 }
 
-static rfbCredential *onGetCredential(rfbClient *client, int credentialType) {
-    if (credentialType == rfbCredentialTypeX509) {
-        // Return empty credentials here, server certificate will be verified later
-        auto credential = (rfbCredential *) malloc(sizeof(rfbCredential));
-        memset(credential, 0, sizeof(rfbCredential));
-        return credential;
-    }
-
+static rfbCredential *getUserCredential(rfbClient *client) {
     auto obj = getManagedClient(client);
     auto env = context.getEnv();
     auto cls = context.managedCls;
@@ -131,13 +127,44 @@ static rfbCredential *onGetCredential(rfbClient *client, int credentialType) {
 
     //Create native rfbCredential
     auto credential = (rfbCredential *) malloc(sizeof(rfbCredential));
+    if (!credential) return nullptr;
     credential->userCredential.username = getNativeStrCopy(env, (jstring) jUsername);
     credential->userCredential.password = getNativeStrCopy(env, (jstring) jPassword);
 
     return credential;
 }
 
+static rfbCredential *onGetCredential(rfbClient *client, int credentialType) {
+    if (credentialType == rfbCredentialTypeX509)
+        return static_cast<rfbCredential *>(calloc(1, sizeof(rfbCredential)));
+    auto ex = getClientExtension(client);
+    if (credentialType != rfbCredentialTypeUser ||
+        !(ex->authenticatedTunnel || (client->subAuthScheme == rfbVeNCryptX509Plain && ex->verifiedCertificate))) {
+        ex->authenticationError = EPROTONOSUPPORT;
+        return nullptr;
+    }
+    return getUserCredential(client);
+}
+
 static rfbBool onVerifyServerCertificate(rfbClient *client, const unsigned char *der, int der_len) {
+    auto ex = getClientExtension(client);
+    ex->verifiedCertificate = false;
+    const unsigned char *p = der;
+    X509 *certificate = der_len > 0 ? d2i_X509(nullptr, &p, der_len) : nullptr;
+    const char *host = ex->certificateHost;
+    unsigned char ip[16];
+    bool valid = false;
+    if (certificate && p == der + der_len && host && *host &&
+        X509_check_purpose(certificate, X509_PURPOSE_SSL_SERVER, 0) == 1) {
+        bool isIp = inet_pton(AF_INET, host, ip) == 1 || inet_pton(AF_INET6, host, ip) == 1;
+        valid = isIp ? X509_check_ip_asc(certificate, host, 0) == 1 :
+                       X509_check_host(certificate, host, 0, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS, nullptr) == 1;
+    }
+    X509_free(certificate);
+    if (!valid) {
+        ex->authenticationError = EBADMSG;
+        return FALSE;
+    }
     auto obj = getManagedClient(client);
     auto env = context.getEnv();
     auto cls = context.managedCls;
@@ -152,7 +179,9 @@ static rfbBool onVerifyServerCertificate(rfbClient *client, const unsigned char 
     jmethodID mid = env->GetMethodID(cls, "cbVerifyServerCertificate", "([B)Z");
     auto result = env->CallBooleanMethod(obj, mid, bytes);
     env->DeleteLocalRef(bytes);
-    return result ? TRUE : FALSE;
+    ex->verifiedCertificate = result == JNI_TRUE && !env->ExceptionCheck();
+    if (!ex->verifiedCertificate) ex->authenticationError = EBADMSG;
+    return ex->verifiedCertificate ? TRUE : FALSE;
 }
 
 static void onBell(rfbClient *client) {
@@ -204,7 +233,25 @@ static rfbBool onHandleCursorPos(rfbClient *client, int x, int y) {
     return TRUE;
 }
 
+static void onGotFrameBufferUpdate(rfbClient *client, int, int y, int, int height) {
+    auto ex = getClientExtension(client);
+    // UltraZip packs multiple destinations into a rectangle with zero header height.
+    if (height == 0)
+        ex->pendingRows.include(0, client->height, client->height);
+    else
+        ex->pendingRows.include(y, y + height, client->height);
+}
+
 static void onFinishedFrameBufferUpdate(rfbClient *client) {
+    auto ex = getClientExtension(client);
+    if (ex->pendingRows.end == 0)
+        return;
+
+    LOCK(ex->mutex);
+    ex->framebufferTexture.publish(ex->pendingRows);
+    UNLOCK(ex->mutex);
+    ex->pendingRows = {};
+
     auto obj = getManagedClient(client);
     auto env = context.getEnv();
 
@@ -219,14 +266,12 @@ static rfbBool onMallocFrameBuffer(rfbClient *client) {
 
     const auto width = client->width;
     const auto height = client->height;
-    const auto requestedSize = (uint64_t) width * height * client->format.bitsPerPixel / 8;
-
-    if (requestedSize >= SIZE_MAX) {
-        rfbClientErr("CRITICAL: cannot allocate frameBuffer, requested size is too large\n");
+    size_t allocSize;
+    if (client->format.bitsPerPixel != 32 || !framebufferByteCount(width, height, 4, &allocSize)) {
+        rfbClientErr("Unsupported framebuffer dimensions or pixel format\n");
+        errno = EOVERFLOW;
         return FALSE;
     }
-
-    auto allocSize = (size_t) requestedSize;
     auto ex = getClientExtension(client);
 
     LOCK(ex->mutex);
@@ -238,13 +283,12 @@ static rfbBool onMallocFrameBuffer(rfbClient *client) {
         client->frameBuffer = static_cast<uint8_t *>(malloc(allocSize));
 
         if (client->frameBuffer) {
-            ex->fbRealWidth = width;
-            ex->fbRealHeight = height;
+            ex->framebufferTexture.resize(width, height);
             memset(client->frameBuffer, 0, allocSize); //Clear any garbage
         } else {
-            ex->fbRealWidth = 0;
-            ex->fbRealHeight = 0;
+            ex->framebufferTexture.resize(0, 0);
         }
+        ex->pendingRows = {};
     }
     UNLOCK(ex->mutex);
 
@@ -289,6 +333,7 @@ static void setCallbacks(rfbClient *client) {
     client->GotXCutText = onGotXCutTextLatin1;
     client->GotXCutTextUTF8 = onGotXCutTextUTF8;
     client->HandleCursorPos = onHandleCursorPos;
+    client->GotFrameBufferUpdate = onGotFrameBufferUpdate;
     client->FinishedFrameBufferUpdate = onFinishedFrameBufferUpdate;
     client->MallocFrameBuffer = onMallocFrameBuffer;
     client->GotCursorShape = onGotCursorShape;
@@ -302,7 +347,7 @@ static void setCallbacks(rfbClient *client) {
 static bool appleGetCredential(void *userCtx, char *usernameOut, size_t usernameCap,
                                char *passwordOut, size_t passwordCap) {
     auto client = (rfbClient *) userCtx;
-    rfbCredential *cred = onGetCredential(client, rfbCredentialTypeUser);
+    rfbCredential *cred = getUserCredential(client);
     if (!cred) return false;
 
     const char *user = cred->userCredential.username ? cred->userCredential.username : "";
@@ -339,6 +384,11 @@ static void appleOnFramebufferUpdated(void *userCtx) {
     onFinishedFrameBufferUpdate((rfbClient *) userCtx);
 }
 
+static void appleOnFramebufferRect(void *userCtx, int y, int height) {
+    auto client = (rfbClient *) userCtx;
+    getClientExtension(client)->pendingRows.include(y, y + height, client->height);
+}
+
 static void appleOnCursorShape(void *userCtx, const uint8_t *bgra, uint16_t width, uint16_t height,
                                uint16_t xHot, uint16_t yHot) {
     auto client = (rfbClient *) userCtx;
@@ -369,6 +419,8 @@ static void appleOnDisplaysChanged(void *userCtx, const AppleDisplayLayout *layo
     auto cls = context.managedCls;
 
     jint count = (jint) layout->count;
+    if (count > APPLE_MAX_SELECTABLE_DISPLAYS)
+        count = APPLE_MAX_SELECTABLE_DISPLAYS;
     jlongArray ids = env->NewLongArray(count);
     jintArray widths = env->NewIntArray(count);
     jintArray heights = env->NewIntArray(count);
@@ -442,6 +494,7 @@ static AppleRfbCallbacks makeAppleCallbacks() {
     cbs.lockFramebuffer = appleLockFramebuffer;
     cbs.unlockFramebuffer = appleUnlockFramebuffer;
     cbs.onFramebufferUpdated = appleOnFramebufferUpdated;
+    cbs.onFramebufferRect = appleOnFramebufferRect;
     cbs.onCursorShape = appleOnCursorShape;
     cbs.onCursorPos = appleOnCursorPos;
     cbs.onDisplaysChanged = appleOnDisplaysChanged;
@@ -541,10 +594,15 @@ Java_com_gaurav_avnc_vnc_VncClient_nativeSetDest(JNIEnv *env, jobject /*thiz*/, 
 extern "C"
 JNIEXPORT jboolean JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeInit(JNIEnv *env, jobject /*thiz*/, jlong client_ptr,
-                                              jstring host, jint port) {
+                                              jstring host, jint port, jstring certificateHost, jboolean authenticatedTunnel) {
     auto client = (rfbClient *) client_ptr;
     auto ex = getClientExtension(client);
 
+    free(ex->certificateHost);
+    ex->certificateHost = getNativeStrCopy(env, certificateHost);
+    ex->authenticatedTunnel = authenticatedTunnel == JNI_TRUE;
+    ex->verifiedCertificate = false;
+    ex->authenticationError = 0;
     client->serverHost = getNativeStrCopy(env, host);
     client->serverPort = port < 100 ? port + 5900 : port;
 
@@ -558,6 +616,7 @@ Java_com_gaurav_avnc_vnc_VncClient_nativeInit(JNIEnv *env, jobject /*thiz*/, jlo
                       (ex->configuredSecurityType == 0 || ex->configuredSecurityType == 30);
     if (allowApple && appleRfbPeekIsAppleBanner(client->sock, 5000) == 1) {
         AppleRfbConfig cfg{};
+        cfg.authenticatedTunnel = ex->authenticatedTunnel;
         cfg.securityType = ex->configuredSecurityType;
         cfg.imageQuality = ex->imageQuality;
         cfg.useRawEncoding = ex->useRawEncoding;
@@ -600,6 +659,7 @@ Java_com_gaurav_avnc_vnc_VncClient_nativeInit(JNIEnv *env, jobject /*thiz*/, jlo
         return JNI_TRUE;
     }
 
+    if (ex->authenticationError) errno = ex->authenticationError;
     return JNI_FALSE;
 }
 
@@ -905,55 +965,32 @@ Java_com_gaurav_avnc_vnc_VncClient_nativeIsEncrypted(JNIEnv * /*env*/, jobject /
 }
 
 extern "C"
-JNIEXPORT void JNICALL
+JNIEXPORT jlong JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeUploadFrameTexture(JNIEnv * /*env*/, jobject /*thiz*/,
-                                                            jlong client_ptr) {
+                                                            jlong client_ptr, jlong uploadedRevision) {
     auto client = (rfbClient *) client_ptr;
     auto ex = getClientExtension(client);
 
     LOCK(ex->mutex);
-
-    if (client->frameBuffer) {
-        glTexImage2D(GL_TEXTURE_2D,
-                     0,
-                     GL_RGBA,
-                     ex->fbRealWidth,
-                     ex->fbRealHeight,
-                     0,
-                     GL_RGBA,
-                     GL_UNSIGNED_BYTE,
-                     client->frameBuffer);
-
-        // Note: client->frameBuffer data is actually in 'BGRA' format, instead of 'RGBA'.
-        // But OpenGL ES doesn't support that directly. So we use 'GL_RGBA' here, and flip
-        // the components to correct order inside fragment shader.
-    }
-
+    const jlong revision = ex->framebufferTexture.upload(client->frameBuffer, uploadedRevision);
     UNLOCK(ex->mutex);
+    return revision;
 }
 
 extern "C"
-JNIEXPORT void JNICALL
+JNIEXPORT jboolean JNICALL
 Java_com_gaurav_avnc_vnc_VncClient_nativeUploadCursorTexture(JNIEnv * /*env*/, jobject /*thiz*/, jlong client_ptr) {
-
     auto client = (rfbClient *) client_ptr;
     auto ex = getClientExtension(client);
-    auto cursor = ex->cursor;
-
-    if (!cursor || !cursor->buffer)
-        return;
+    jboolean uploaded = JNI_FALSE;
 
     LOCK(ex->mutex);
-
-    glTexImage2D(GL_TEXTURE_2D,
-                 0,
-                 GL_RGBA,
-                 cursor->width,
-                 cursor->height,
-                 0,
-                 GL_RGBA,
-                 GL_UNSIGNED_BYTE,
-                 cursor->buffer);
-
+    auto cursor = ex->cursor;
+    if (cursor && cursor->buffer && cursor->width && cursor->height) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, cursor->width, cursor->height,
+                     0, GL_RGBA, GL_UNSIGNED_BYTE, cursor->buffer);
+        uploaded = glGetError() == GL_NO_ERROR;
+    }
     UNLOCK(ex->mutex);
+    return uploaded;
 }

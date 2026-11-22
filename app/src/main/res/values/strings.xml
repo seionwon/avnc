@@ -7,6 +7,16 @@
   -->
 
 <resources>
+    <string name="err_device_auth_unavailable">Set up a device screen lock or restore device authentication to continue.</string>
+    <string name="title_save_link">Save server from link?</string>
+    <string name="msg_save_link">Save %1$s and connect to %2$s?</string>
+    <string name="msg_link_name_in_use">A saved server already uses this name. Edit it in the server list.</string>
+    <string name="msg_link_added">Added new server for URI</string>
+    <string name="title_verify_certificate">Verify server certificate</string>
+    <string name="msg_verify_certificate">Server: %1$s\n\nSHA-256: %2$s\n\nCompare this fingerprint with the server administrator before continuing.</string>
+    <string name="pref_clipboard_consent_summary">Ask before sharing clipboard text with a server.</string>
+    <string name="msg_allow_clipboard">Allow %1$s to read and replace clipboard text on this device on this and future connections? You can revoke access in Settings under Servers.</string>
+    <string name="msg_allow_clipboard_once">Allow %1$s to read and replace clipboard text on this device for this connection?</string>
     <string name="app_name" translatable="false">AVNC</string>
 
     <string name="title_add_server_profile">Add server</string>
@@ -45,19 +55,18 @@
     <string name="title_apple_display_mode">macOS display</string>
     <string name="title_apple_display_standard">Standard (Physical displays)</string>
     <string name="title_apple_display_virtual_1">High Performance: 1 Virtual Display</string>
-    <string name="title_apple_display_virtual_2">High Performance: 2 Virtual Displays</string>
-    <string name="summary_apple_display_standard">Use the Mac\'s connected monitors; switch displays from the viewer toolbar</string>
+    <string name="summary_apple_display_standard">Select one of the Mac\'s connected monitors (up to 6); switch displays from the viewer toolbar</string>
     <string name="summary_apple_display_virtual_1">Create 1 virtual display on Apple Silicon Macs (macOS Sonoma+)</string>
-    <string name="summary_apple_display_virtual_2">Create 2 virtual displays on Apple Silicon Macs (macOS Sonoma+), then switch to Display 1 or 2</string>
     <string name="title_apple_initial_display">Initial display</string>
-    <string name="title_display_all">All displays</string>
     <string name="title_display_1">Display 1</string>
     <string name="title_display_2">Display 2</string>
     <string name="title_display_3">Display 3</string>
     <string name="title_display_4">Display 4</string>
+    <string name="title_display_5">Display 5</string>
+    <string name="title_display_6">Display 6</string>
     <string name="title_display_numbered">Display %1$d</string>
     <string name="title_display_numbered_with_size">Display %1$d (%2$d×%3$d)</string>
-    <string name="msg_apple_display_mode_help">For macOS built-in Screen Sharing (using macOS username &amp; password):\n\n• <b>Standard</b>: Connects to the Mac\'s physical monitors.\n• <b>High Performance: 1 or 2 Virtual Displays</b>: Creates virtual displays on Apple Silicon Macs (macOS Sonoma+), matching macOS Screen Sharing.\n\nChoose an <b>Initial display</b> (such as Display 1) or switch live between All Displays, Display 1, Display 2, etc. from the viewer toolbar.</string>
+    <string name="msg_apple_display_mode_help">For macOS built-in Screen Sharing (using macOS username &amp; password):\n\n• <b>Standard</b>: Connects to one of the Mac\'s physical monitors (supports up to 6 displays).\n• <b>High Performance: 1 Virtual Display</b>: Creates a single virtual display on Apple Silicon Macs (macOS Sonoma+).\n\nChoose an <b>Initial display</b> (Display 1–6) or switch between single displays (1–6) live from the viewer toolbar.</string>
     <string name="title_image_quality_raw">Raw</string>
     <string name="title_vnc_security">Security</string>
     <string name="title_use_ssh_tunnel">Use SSH tunnel</string>

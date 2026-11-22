@@ -348,3 +348,157 @@ macOS 내장 Screen Sharing(`RFB 3.889`) 접속 환경에서 발생한 세 가�
 - `git diff --stat Readme.md` 비어 있음 확인(원본 `Readme.md` 100% 무수정 유지).
 - `.github/README.md`, `docs/MACOS_GUIDE.md`, `docs/MACOS_GUIDE.ko.md` 내 모든 상대 경로 링크 및 이미지(`../metadata/en-US/branding/wordmark.svg`)가 실제 파일에 정상 대응함을 확인했습니다.
 - 로컬 전용 디렉터리(`.codememo-design/`, `.codememo-build/`, `.cc-uploads/`, `build/`) 및 `.apk` 산출물이 Git 추적 대상에서 제외됨을 확인했습니다.
+
+
+---
+
+<a id="hist-20261121-009"></a>
+### 2026-11-21 22:09:38 +09:00 — 스마트폰 키보드 포커스·IME 바인딩·조합 입력 차단 버그 수정 (`v3.3.6-seionwon`)
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `hist-20261121-009` |
+| 변경 유형 | 버그 수정 (`Keyboard.kt`, `VirtualKeys.kt`, `Toolbar.kt`, `VncActivity.kt`, `InputView.kt`, `Dispatcher.kt`, `MacKeyboardSync.kt`, `KeyHandler.kt`, `AppleRfb.cpp`, `app/build.gradle.kts`) |
+| 상태 | 완료 (로컬 C++ 네이티브·JVM 단위 테스트 및 `AVNC-v3.3.6-seionwon.apk` 빌드 검증 완료, 실기기 설치 테스트 대기) |
+
+#### 1. 기능 목적
+- 갤럭시 탭에서는 정상 동작하던 키보드 입력이 스마트폰에서 터치는 되는데 원격 입력창에 키보드 타이핑이 들어가지 않던 문제를 근본 수정했습니다.
+
+#### 2. 여는 위치 및 사용 방법
+- CodeMemo **실행 탭**에서 최신 **`AVNC-v3.3.6-seionwon.apk`**를 내려받아 스마트폰에 설치한 뒤 macOS(또는 일반 VNC) 서버에 접속해 툴바 키보드 버튼, 가상 키 바 키보드 아이콘, 두 손가락 탭 중 어떤 방식으로 키보드를 열더라도 바로 한글·영문을 입력할 수 있습니다.
+
+#### 3. 주요 원인 및 수정 내용
+- **오프스크린 `VirtualKeys.textBox` 포커스 탈취 및 `ToggleKeyboard` 포커스 누락 수정 (`VirtualKeys.kt`, `VncActivity.kt`)**:
+  - 신규 설치 기본값(`showVirtualKeys = true`)으로 표시되는 `VirtualKeys`의 `ViewPager`(`offscreenPageLimit = 2`) 2페이지에 숨어 있던 `VkEditText`(`text_box`)가 비활성 상태에서도 `focusableInTouchMode = true`로 남아 있어, `VncActivity.showKeyboard()`의 `currentFocus as? EditText` 조건이 화면 밖 `text_box`로 키보드 입력을 가로채던 문제를 차단했습니다(`isTextBoxActive`가 참일 때만 `textBox` 포커스 허용, 숨김·페이지 전환 시 즉시 포커스 해제 후 `inputView`로 복원).
+  - `VirtualKeys` 하단 키보드 토글 버튼이 `toggleKeyboard(inputView)`를 직접 호출해 `inputView.requestFocus()`를 생략하던 문제를 `activity.toggleKeyboard()` 경유로 통일하고, `onSessionConnected()`, `ViewerHelp` 종료, `onWindowFocusChanged(true)`에서도 `inputView` 포커스를 보장했습니다.
+- **툴바 드로어 포커스 차단 및 Android 11–16 / 삼성 One UI IME 바인딩 타이밍 레이스 수정 (`Toolbar.kt`, `Keyboard.kt`)**:
+  - `Toolbar.keyboardBtn`이 드로어가 열린 상태에서 `showKeyboard()`를 먼저 호출하고 `close()`를 나중에 호출하던 순서를 뒤집어 `close()` 후 `showKeyboard()`를 실행하고, `onDrawerClosed()` 시점에도 키보드 포커스·IME 바인딩을 재확인하도록 수정했습니다.
+  - `Keyboard.showKeyboard(view)`가 `requestFocus()` 직후 동일 프레임에서 `SoftwareKeyboardControllerCompat.show()`만 호출해 `InputView.onCreateInputConnection()`이 바인딩되지 않던 레이스를 없애기 위해 `view.post` + 150ms 안전 재확인(`!imm.isActive(view)` 시 `imm.restartInput(view)` + `imm.showSoftInput` + `SoftwareKeyboardControllerCompat.show()`)을 적용하고, `hideKeyboard()` 시 예약된 재시도를 즉시 취소하도록 보강했습니다.
+- **`1109` 미수신(`remoteKeyboardSource == null`) 시 폰 키보드 조합 입력 침묵 제거 (`Dispatcher.kt`, `MacKeyboardSync.kt`, `VncActivity.kt`, `InputView.kt`)**:
+  - `remoteKeyboardSource == null`일 때 `prefersCommittedTextOnly`와 `shouldUsePasteText`가 `true`를 반환하면서, 영문·한글 모두 `setComposingText`로 조합하는 스마트폰 키보드(삼성 키보드·Gboard)의 입력을 전부 숨겨 버리던 문제를 수정했습니다. 이제 macOS가 실제로 IME 상태(`src != null && src.isInputMethod`)로 확인된 경우에만 조합 버퍼링/`PasteText`를 사용하고, `src == null`이거나 비-IME(`ABC`/`US`)일 때는 직접 `0x04` 유니코드 diff(`appleRfbSendTextDiff`)로 즉시 입력됩니다.
+  - `remoteKeyboardSource`가 IME → `ABC`로 전환되면 `VncActivity`가 `inputView.onRemoteKeyboardSourceChanged()`를 호출해 대기 중이던 조합 문자열을 즉시 플러시합니다.
+- **Android 13–16 `InputConnection` 확장 및 포커스 전환 복구 (`InputView.kt`, `KeyHandler.kt`)**:
+  - Android 13/14+ 폰 키보드가 사용하는 `replaceText` (API 34+), 3인자 `commitText`/`setComposingText`/`setComposingRegion` (API 33+), `commitCompletion`을 `batch {}` 경로로 오버라이드했습니다.
+  - `onFocusChanged` 및 `onTouchEvent(ACTION_DOWN)`에서 포커스 획득 직후 `imm.isActive(this)`가 거짓이면 `restartInput`으로 IME 연결을 자동 복구하고, 아직 포커스가 정착되기 전에 조기 `restartInput`을 호출하지 않도록 수정했습니다.
+  - 일반(비-Apple) VNC 서버용 `KeyHandler.onTextInput`에서도 `\r\n`, `\n`, `\t`, `\b`를 `XK_Return`/`XK_Tab`/`XK_BackSpace`로 정확히 변환하도록 개선했습니다.
+- **`appleRfbPasteText` 레이아웃 독립 물리 `Cmd+V` 개선 (`AppleRfb.cpp`)**:
+  - macOS가 IME 상태이거나 이모지를 보낼 때 사용하는 `appleRfbPasteText`가 `0x1f` Transient 페이스트보드 전송 후 15ms 대기(`pboard` 반영 확보) 뒤 `0x10` 암호화 물리 키코드(`Command(55) + V(9)`)를 단일 패킷으로 전송하도록 강화했습니다(`0x10` 미지원 서버는 `0x04` 폴백 유지).
+- **버전 갱신 (`app/build.gradle.kts`)**: 포크 버전 규칙에 따라 `versionCode = 58`, `versionName = "3.3.6-seionwon"`으로 갱신.
+
+#### 4. 검증 결과
+- **네이티브 C++ 단위·E2E 테스트** (`clang++ -std=c++17 -Wall -Wextra -Werror -Wno-deprecated-declarations`, OpenSSL 3 + zlib): **9/9 통과** (`0x1f` Transient 페이스트보드 + `0x10` 물리 `Command(55)+V(9)` 검증 포함).
+- **Android JVM 단위 테스트** (`./gradlew :app:testDebugUnitTest --no-daemon`): **12/12 통과** (`MacKeyboardSyncTest` 9/9, `RemoteDisplayTest` 3/3).
+- **Android 계측 테스트 컴파일** (`./gradlew :app:compileDebugAndroidTestKotlin --no-daemon`): 통과.
+- **디버그 APK 빌드** (`./gradlew :app:assembleDebug --no-daemon`):
+  - 단일 산출물 `app/build/outputs/apk/debug/AVNC-v3.3.6-seionwon.apk` (`13,149,695 bytes`, `versionCode 58`, `versionName "3.3.6-seionwon (debug)"`, SHA-256 `035bc0a50f96b0254f31b44d8c8c4eddd5cc0990cdd5b8be85137009cde83b7d`) 생성 확인.
+
+#### 5. 실제 배포 상태 및 제한 사항
+- 로컬 검증 및 `AVNC-v3.3.6-seionwon.apk` 빌드까지 완료되었으며, 실제 스마트폰 설치 테스트 및 원격 GitHub 푸시는 사용자 확인 후 진행할 단계입니다.
+
+
+---
+
+<a id="hist-20261122-001"></a>
+### 2026-11-22 01:59:31 +09:00 — macOS 모니터 최대 6개 단일 선택 지원 및 2개 동시·전체 디스플레이 제거 (`v3.3.7-seionwon`)
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `hist-20261122-001` |
+| 변경 유형 | 기능 변경 (`arrays.xml`, `strings.xml`, `values-ko/strings.xml`, `ServerProfile.kt`, `RemoteDisplay.kt`, `EditorViewModel.kt`, `VncUri.kt`, `RemoteSession.kt`, `Toolbar.kt`, `VncClient.kt`, `AppleRfb.h`, `AppleRfb.cpp`, `native-vnc.cpp`, `app/build.gradle.kts`) |
+| 상태 | 완료 (로컬 C++ 네이티브·JVM 단위 테스트 및 `AVNC-v3.3.7-seionwon.apk` 빌드 검증 완료, 실기기 설치 대기) |
+
+#### 1. 기능 목적
+- 다중 모니터 macOS 서버에서 **최대 6개의 모니터 중 반드시 1개만 선택해 표시**하도록 지원 범위를 확장(기존 4개 → 6개)하고, **2개 동시 가상 디스플레이(`가상 디스플레이 2개`) 및 다중 모니터 합쳐 보기(`전체 디스플레이`)** 기능을 제거했습니다.
+
+#### 2. 여는 위치 및 사용 방법
+- **프로필 편집 → 고급**:
+  - **macOS 디스플레이**: `표준 (물리 디스플레이)` 또는 `고성능: 가상 디스플레이 1개` 중 선택(기존 `가상 디스플레이 2개` 제거).
+  - **초기 디스플레이**: `디스플레이 1` ~ `디스플레이 6` 중 1개 선택(기본값 `디스플레이 1`, 기존 `전체 디스플레이` 제거).
+- **뷰어 도구 모음 → 디스플레이 전환**: 연결된 모니터(최대 6개) 중 **단일 디스플레이 1개**만 선택해 실시간 전환할 수 있습니다.
+- **빌드 산출물**: CodeMemo 실행 탭의 `app/build/outputs/apk/debug/AVNC-v3.3.7-seionwon.apk` (`versionCode 59`, `versionName "3.3.7-seionwon (debug)"`).
+
+#### 3. 주요 변경 내용 및 하위 호환 처리
+- **2개 동시 가상 디스플레이 제거 (`arrays.xml`, `strings.xml`, `values-ko/strings.xml`, `AppleRfb.h`, `AppleRfb.cpp`)**:
+  - `APPLE_DISPLAY_VIRTUAL_2` 옵션과 UI 항목(`고성능: 가상 디스플레이 2개`)을 제거하고, `appleRfbBuildVirtualDisplayMessage`도 `displayCount == 1`만 허용하도록 제한했습니다.
+  - 기존 저장 프로필이나 `vnc://` URI에 `appleDisplayMode = 2`가 남아 있던 경우 Room DB 마이그레이션 없이 자동으로 `APPLE_DISPLAY_VIRTUAL_1`(`1`)로 정규화됩니다.
+- **최대 6개 단일 디스플레이 전용 선택 (`RemoteDisplay.kt`, `ServerProfile.kt`, `EditorViewModel.kt`, `VncUri.kt`, `RemoteSession.kt`, `Toolbar.kt`, `VncClient.kt`, `native-vnc.cpp`, `AppleRfb.cpp`)**:
+  - `APPLE_MAX_SELECTABLE_DISPLAYS = 6` / `RemoteDisplayState.MAX_SELECTABLE_DISPLAYS = 6` 상수를 적용해 UI(초기 디스플레이 `1~6`, 뷰어 툴바 라디오 버튼)와 네이티브 콜백 모두 최대 6개까지 단일 선택만 노출합니다.
+  - 뷰어 툴바에서 `전체 디스플레이` 항목을 제거하고, `VncClient.selectDisplay`와 `appleRfbSelectDisplay`에서 `ALL_DISPLAYS(0 / 0xffffffff)` 선택을 차단했습니다.
+  - 다중 모니터 서버 접속 시 기존 프로필의 `appleInitialDisplay = 0`(구 전체 디스플레이)이거나 연결된 모니터 수보다 큰 번호가 설정되어 있어도 자동으로 `디스플레이 1`을 선택해 합쳐진 다중 화면에 머물지 않도록 처리했습니다.
+- **한·영 문서 동기화**: `.github/README.md`, `docs/MACOS_GUIDE.md`, `docs/MACOS_GUIDE.ko.md`를 6모니터 단일 선택 기준에 맞게 갱신했습니다(원본 `Readme.md` 무수정 유지).
+- **버전 갱신 (`app/build.gradle.kts`)**: 포크 버전 정책에 따라 `versionCode = 59`, `versionName = "3.3.7-seionwon"`으로 갱신했습니다.
+
+#### 4. 검증 결과
+- **네이티브 C++ 단위·E2E 테스트** (`clang++ -std=c++17 -Wall -Wextra -Werror -Wno-deprecated-declarations`, OpenSSL 3 + zlib): **9/9 통과** (`displayCount = 2` 거부, 6모니터 호스트에서 `initialDisplay = 6` 자동 선택·`디스플레이 5`/`디스플레이 1` 전환·`All Displays` 거부, 레거시 `initialDisplay = 0` → `디스플레이 1` 자동 선택 검증 포함).
+- **Android JVM 단위 테스트** (`./gradlew :app:testDebugUnitTest --no-daemon`): **12/12 통과** (`RemoteDisplayTest` 3/3 — 6모니터 지원·8모니터 6개 상한·레거시 `2`/`0` 정규화 포함, `MacKeyboardSyncTest` 9/9).
+- **Android 계측 테스트 컴파일 및 디버그 APK 빌드** (`:app:compileDebugAndroidTestKotlin`, `:app:assembleDebug`): 통과.
+  - 단일 산출물: `app/build/outputs/apk/debug/AVNC-v3.3.7-seionwon.apk` (`13,149,443 bytes`, SHA-256 `ad2452cfe8d5bbda6b72e461065090e5c1c2b9250e64bdc04982e21bb58a0a3b`).
+
+#### 5. 실제 배포 상태 및 제한 사항
+- 로컬 테스트 및 `AVNC-v3.3.7-seionwon.apk` 빌드까지 완료되었으며, 실기기 설치 확인 및 원격 GitHub 푸시는 사용자 확인 후 진행할 단계입니다.
+
+
+---
+
+<a id="hist-20261122-002"></a>
+### 2026-11-22 02:22:18 +09:00 — 안드로이드 키보드 음성 입력(Voice Input) 지원 수정 (`v3.3.8-seionwon`)
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `hist-20261122-002` |
+| 변경 유형 | 버그 수정 (`InputView.kt`, `InputHandler.kt`, `Dispatcher.kt`, `app/build.gradle.kts`) |
+| 상태 | 완료 (로컬 JVM 단위 테스트, 계측 테스트 컴파일 및 `AVNC-v3.3.8-seionwon.apk` 빌드 검증 완료, 실기기 설치 대기) |
+
+#### 1. 기능 목적
+- macOS 서버에 연결해 Claude Code 프롬프트 창 등 원격 입력란에서 안드로이드 키보드(삼성 키보드 음성 입력 / Google 음성 입력·Gboard)의 마이크 음성 입력을 시도할 때 **"음성 입력을 지원하지 않습니다"** 오류가 뜨던 문제를 해결했습니다.
+
+#### 2. 여는 위치 및 사용 방법
+- CodeMemo **실행 탭**에서 **`AVNC-v3.3.8-seionwon.apk`**를 내려받아 설치한 뒤 macOS 서버에 접속하고, Claude Code 프롬프트 등 원격 입력란을 터치해 안드로이드 키보드를 연 다음 키보드의 **마이크(음성 입력)** 버튼으로 한글·영문을 말하면 실시간으로 텍스트가 입력됩니다.
+
+#### 3. 원인 및 수정 내용
+- **음성 입력을 차단하던 `EditorInfo` 제한 플래그 제거 (`InputView.kt`, `InputHandler.kt`, `Dispatcher.kt`)**:
+  - 기존 `InputView.onCreateInputConnection()`이 일반 입력 상태에서도 `EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING`(시크릿/보안 입력 모드)과 `InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS`를 항상 설정하고 있어, 삼성 키보드와 Gboard가 해당 입력창을 음성 입력 불가 필드로 판정하고 "지원하지 않습니다" 메시지를 표시했습니다.
+  - 일반 입력 시 표준 멀티라인 텍스트 입력(`InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE`, `EditorInfo.IME_ACTION_UNSPECIFIED | IME_FLAG_NO_EXTRACT_UI | IME_FLAG_NO_FULLSCREEN`, `fieldId`, `packageName`)을 선언하도록 수정하고, `IME_FLAG_NO_PERSONALIZED_LEARNING` / `TYPE_TEXT_VARIATION_VISIBLE_PASSWORD`는 macOS `1109 KeyboardSource`가 실제 암호창(`secureInput == true`)을 알릴 때만 동적으로 적용(`onRemoteKeyboardSourceChanged`에서 자동 `restartInput`)하도록 변경했습니다.
+- **`getExtractedText()` 및 `GET_EXTRACTED_TEXT_MONITOR` 구현 (`InputView.kt`)**:
+  - `BaseInputConnection.getExtractedText()`가 기본 `null`을 반환해 일부 음성 받아쓰기 엔진이 편집 불가 뷰로 오인하던 문제를 해결하기 위해, `document` 버퍼와 선택 범위를 채운 `ExtractedText`를 반환하고 모니터링 토큰이 요청되면 편집 시 `imm.updateExtractedText(...)`로 실시간 동기화하도록 구현했습니다.
+- **버전 갱신 (`app/build.gradle.kts`)**: 포크 버전 정책에 따라 `versionCode = 60`, `versionName = "3.3.8-seionwon"`으로 갱신했습니다.
+
+#### 4. 검증 결과
+- **Android JVM 단위 테스트** (`./gradlew :app:testDebugUnitTest --no-daemon`): **12/12 통과** (`MacKeyboardSyncTest` 9/9, `RemoteDisplayTest` 3/3).
+- **Android 계측 테스트 컴파일 및 디버그 APK 빌드** (`:app:compileDebugAndroidTestKotlin`, `:app:assembleDebug`): 통과.
+  - 단일 산출물: `app/build/outputs/apk/debug/AVNC-v3.3.8-seionwon.apk` (`13,150,341 bytes`, `versionCode 60`, `versionName "3.3.8-seionwon (debug)"`, SHA-256 `7aca4f2a894e4deca21afe83a192fc4830adf2ba7a4a63808d62ebaa87cd899a`).
+
+#### 5. 실제 배포 상태 및 제한 사항
+- 로컬 검증 및 `AVNC-v3.3.8-seionwon.apk` 빌드까지 완료되었으며, 실기기 설치 테스트 단계입니다.
+- **참고 (제한 사항)**: 이 수정은 안드로이드 기기 키보드의 **음성 입력(삼성 음성 입력 / Google 음성 입력)**이 원격 macOS 입력창(Claude Code 프롬프트 포함)으로 텍스트를 받아쓰기하는 기능을 활성화합니다. VNC(RFB) 프로토콜 자체는 안드로이드 마이크 오디오를 원격 맥으로 전달하지 않으므로, 맥 터미널 안의 Claude Code 자체 `/voice` 명령 대신 **안드로이드 키보드의 마이크(음성 입력) 버튼**을 사용해 입력하면 됩니다.
+
+
+---
+
+<a id="hist-20261122-003"></a>
+### 2026-11-22 04:34:30 +09:00 — 원격 화면의 부분 갱신과 커서 이미지 재사용
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `hist-20261122-003` |
+| 변경 유형 | 성능 개선 |
+| 상태 | Android ARM 네이티브 빌드 및 로컬 렌더링 검증 완료 · 미배포 |
+
+#### 1. 기능 목적 및 사용 방법
+
+홈에서 일반 VNC 서버나 macOS 화면 공유에 접속하면 자동으로 적용됩니다. 정지한 원격 화면에서 포인터를 움직이거나 화면을 확대·이동할 때 Android 기기가 같은 화면 픽셀을 GPU로 반복 전송하던 비용을 줄였습니다.
+
+#### 2. 갱신 동작
+
+- 서버가 보낸 여러 변경 영역을 모아 첫 변경 줄부터 마지막 변경 줄까지 한 번에 전송합니다. 커서는 모양이 바뀔 때 이미지를 갱신하고, 위치만 바뀌면 기존 이미지를 새 위치에 그립니다.
+- 재접속, 원격 해상도 변경, OpenGL 컨텍스트 재생성 시에는 전체 화면을 다시 올립니다. 텍스처 전송에 실패하면 다음 그리기에서 다시 초기화합니다.
+
+#### 3. 검증 결과
+
+- 1920×1080 기준으로 첫 전체 전송은 8,294,400바이트였습니다. 이후 동일 화면을 60회 다시 그릴 때 추가 화면 전송은 0바이트였고, 16줄 범위의 변경은 122,880바이트였습니다. OpenGL ES 소프트웨어 렌더러에서 부분 갱신, 누적 갱신, 두 번째 텍스처 복원, 해상도 변경 후 픽셀을 읽어 원본 버퍼와 일치하는지 확인했습니다.
+- 일반 VNC의 Raw·CopyRect 및 macOS의 Raw·CopyRect·Zlib·AppleThousands·ZRLE 갱신 경로를 검증했습니다. 렌더러 호출 테스트에서 같은 크기의 새 커서 모양, 숨김 커서, 전송 실패 후 재시도, 연결 및 컨텍스트 재생성을 확인했습니다.
+- Android NDK의 `arm64-v8a`와 `armeabi-v7a` 네이티브 라이브러리 빌드, Android API 36 대상 변경 Kotlin 소스 컴파일, 기존 JVM 단위 테스트 12개가 통과했습니다.
+
+#### 4. 실제 배포 상태 및 제한 사항
+
+이번 변경은 로컬 소스에 반영했습니다. 실행 환경에서 Gradle의 잠금용 소켓 생성이 제한되어 새 APK를 생성하지 못했습니다. 실기기 FPS와 배터리 사용량은 측정하지 않았습니다.

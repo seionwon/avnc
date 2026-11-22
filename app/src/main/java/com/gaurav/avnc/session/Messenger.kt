@@ -125,8 +125,8 @@ class Messenger(private val client: VncClient) {
      * Misc
      **************************************************************************/
 
-    fun sendClipboardText(text: String) {
-        execute { client.sendCutText(text) }
+    fun sendClipboardText(text: String, permitted: () -> Boolean) {
+        execute { if (permitted()) client.sendCutText(text) }
     }
 
     fun setDesktopSize(width: Int, height: Int) {

@@ -10,19 +10,26 @@ package com.gaurav.avnc.ui.vnc.input
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Rect
 import android.os.Build
 import android.text.Editable
 import android.text.InputType
 import android.text.Selection
 import android.text.SpannableStringBuilder
 import android.util.AttributeSet
+import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.PointerIcon
 import android.view.View
 import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.CompletionInfo
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedText
+import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputMethodManager
+import android.view.inputmethod.TextAttribute
+import androidx.annotation.RequiresApi
 import androidx.core.view.inputmethod.EditorInfoCompat
 import com.gaurav.avnc.viewmodel.VncViewModel
 import java.text.BreakIterator
@@ -46,6 +53,8 @@ class InputView(context: Context?, attrs: AttributeSet? = null) : View(context, 
     private var sentText = ""
     private var batchDepth = 0
     private var imeVisible = false
+    private var extractedTextMonitorToken: Int? = null
+    private var lastSecureInput = false
 
     private val imm: InputMethodManager?
         get() = context?.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
@@ -90,17 +99,39 @@ class InputView(context: Context?, attrs: AttributeSet? = null) : View(context, 
         override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean =
             batch { super.commitText(text, newCursorPosition) }
 
+        @RequiresApi(33)
+        override fun commitText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?): Boolean =
+            batch { super.commitText(text, newCursorPosition, textAttribute) }
+
         override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean =
             batch { super.setComposingText(text, newCursorPosition) }
 
+        @RequiresApi(33)
+        override fun setComposingText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?): Boolean =
+            batch { super.setComposingText(text, newCursorPosition, textAttribute) }
+
         override fun setComposingRegion(start: Int, end: Int): Boolean =
             batch { super.setComposingRegion(start, end) }
+
+        @RequiresApi(33)
+        override fun setComposingRegion(start: Int, end: Int, textAttribute: TextAttribute?): Boolean =
+            batch { super.setComposingRegion(start, end, textAttribute) }
 
         override fun finishComposingText(): Boolean =
             batch { super.finishComposingText() }
 
         override fun setSelection(start: Int, end: Int): Boolean =
             batch { super.setSelection(start, end) }
+
+        @RequiresApi(34)
+        override fun replaceText(start: Int, end: Int, text: CharSequence, newCursorPosition: Int,
+                                 textAttribute: TextAttribute?): Boolean =
+            batch { super.replaceText(start, end, text, newCursorPosition, textAttribute) }
+
+        override fun commitCompletion(text: CompletionInfo?): Boolean {
+            val completion = text?.text ?: return false
+            return commitText(completion, 1)
+        }
 
         override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
             val excess = excessBefore(beforeLength, codePoints = false)
@@ -158,9 +189,19 @@ class InputView(context: Context?, attrs: AttributeSet? = null) : View(context, 
             }
         }
 
+        override fun getExtractedText(request: ExtractedTextRequest?, flags: Int): ExtractedText {
+            extractedTextMonitorToken = if (request != null && (flags and GET_EXTRACTED_TEXT_MONITOR) != 0) {
+                request.token
+            } else {
+                null
+            }
+            return buildExtractedText()
+        }
+
         override fun closeConnection() {
             super.closeConnection()
             batchDepth = 0
+            extractedTextMonitorToken = null
         }
     }
 
@@ -200,8 +241,16 @@ class InputView(context: Context?, attrs: AttributeSet? = null) : View(context, 
     fun onImeVisibilityChanged(visible: Boolean) {
         if (imeVisible == visible) return
         imeVisible = visible
+        Log.d(TAG, "onImeVisibilityChanged: visible=$visible focused=$isFocused active=${imm?.isActive(this)}")
         if (visible) {
             inputHandler?.ensureMacNonIme()
+            if (isFocused && imm?.isActive(this) != true) {
+                post {
+                    if (isFocused && imeVisible && imm?.isActive(this) != true) {
+                        imm?.restartInput(this)
+                    }
+                }
+            }
         } else {
             clearEditorState(flushComposing = true, restartIme = false)
         }
@@ -210,6 +259,40 @@ class InputView(context: Context?, attrs: AttributeSet? = null) : View(context, 
     fun onWindowFocusGained() {
         if (imeVisible) {
             inputHandler?.ensureMacNonIme()
+            if (isFocused && imm?.isActive(this) != true) {
+                post {
+                    if (isFocused && imeVisible && imm?.isActive(this) != true) {
+                        imm?.restartInput(this)
+                    }
+                }
+            }
+        }
+    }
+
+    fun onRemoteKeyboardSourceChanged() {
+        val isSecure = inputHandler?.isRemoteSecureInput == true
+        if (isSecure != lastSecureInput) {
+            lastSecureInput = isSecure
+            if (isFocused && imm?.isActive(this) == true) {
+                imm?.restartInput(this)
+            }
+        }
+        if (batchDepth == 0 && document.isNotEmpty() && inputHandler?.prefersCommittedTextOnly != true) {
+            syncDocument()
+        }
+    }
+
+    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
+        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+        Log.d(TAG, "onFocusChanged: gainFocus=$gainFocus imeVisible=$imeVisible")
+        if (!gainFocus) {
+            clearEditorState(flushComposing = true, restartIme = false)
+        } else if (imeVisible) {
+            post {
+                if (isFocused && imeVisible && imm?.isActive(this) != true) {
+                    imm?.restartInput(this)
+                }
+            }
         }
     }
 
@@ -225,7 +308,7 @@ class InputView(context: Context?, attrs: AttributeSet? = null) : View(context, 
         Selection.setSelection(document, 0)
         if (hadContent) {
             reportSelection()
-            if (restartIme) {
+            if (restartIme && isFocused && imm?.isActive(this) == true) {
                 imm?.restartInput(this)
             }
         }
@@ -299,12 +382,29 @@ class InputView(context: Context?, attrs: AttributeSet? = null) : View(context, 
         reportSelection()
     }
 
+    private fun buildExtractedText(): ExtractedText {
+        val selStart = Selection.getSelectionStart(document).coerceIn(0, document.length)
+        val selEnd = Selection.getSelectionEnd(document).coerceIn(0, document.length)
+        return ExtractedText().apply {
+            text = document.toString()
+            startOffset = 0
+            partialStartOffset = -1
+            partialEndOffset = -1
+            selectionStart = selStart
+            selectionEnd = selEnd
+            flags = 0
+        }
+    }
+
     private fun reportSelection() {
         val selStart = Selection.getSelectionStart(document).coerceIn(0, document.length)
         val selEnd = Selection.getSelectionEnd(document).coerceIn(0, document.length)
         val compStart = BaseInputConnection.getComposingSpanStart(document)
         val compEnd = BaseInputConnection.getComposingSpanEnd(document)
         imm?.updateSelection(this, selStart, selEnd, compStart, compEnd)
+        extractedTextMonitorToken?.let { token ->
+            imm?.updateExtractedText(this, token, buildExtractedText())
+        }
     }
 
     private fun syncDocument() {
@@ -375,22 +475,36 @@ class InputView(context: Context?, attrs: AttributeSet? = null) : View(context, 
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
         batchDepth = 0
+        extractedTextMonitorToken = null
         BaseInputConnection.removeComposingSpans(document)
         document.clear()
         sentText = ""
         Selection.setSelection(document, 0)
 
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or
+        val isSecure = inputHandler?.isRemoteSecureInput == true
+        lastSecureInput = isSecure
+
+        // Avoid IME_FLAG_NO_PERSONALIZED_LEARNING and TYPE_TEXT_FLAG_NO_SUGGESTIONS during normal
+        // editing so Samsung Voice Input and Gboard Voice Typing remain enabled (they treat those
+        // flags as a restricted/incognito field and display "voice input is not supported").
+        outAttrs.inputType = if (isSecure) {
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        } else {
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        }
+        outAttrs.imeOptions = EditorInfo.IME_ACTION_UNSPECIFIED or
                 EditorInfo.IME_FLAG_NO_EXTRACT_UI or
                 EditorInfo.IME_FLAG_NO_FULLSCREEN or
-                EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+                (if (isSecure) EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING else 0)
+        outAttrs.fieldId = id
+        outAttrs.packageName = context?.packageName
         outAttrs.initialSelStart = 0
         outAttrs.initialSelEnd = 0
         outAttrs.initialCapsMode = 0
         EditorInfoCompat.setInitialSurroundingText(outAttrs, document)
 
         inputHandler?.ensureMacNonIme()
+        Log.d(TAG, "onCreateInputConnection: focused=$isFocused apple=${inputHandler?.isAppleSession} secure=$isSecure")
         return InputConnection()
     }
 
@@ -399,8 +513,16 @@ class InputView(context: Context?, attrs: AttributeSet? = null) : View(context, 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            if (!isFocused) requestFocus()
-            clearEditorState(flushComposing = true, restartIme = true)
+            val wasFocused = isFocused
+            if (!wasFocused) requestFocus()
+            clearEditorState(flushComposing = true, restartIme = wasFocused)
+            if (!wasFocused && imeVisible) {
+                post {
+                    if (isFocused && imeVisible && imm?.isActive(this) != true) {
+                        imm?.restartInput(this)
+                    }
+                }
+            }
         }
         return inputHandler?.onTouchEvent(event) == true
     }
@@ -418,6 +540,7 @@ class InputView(context: Context?, attrs: AttributeSet? = null) : View(context, 
     }
 
     companion object {
+        private const val TAG = "InputView"
         private const val MAX_BUFFER_LEN = 256
         private const val KEEP_BUFFER_LEN = 64
     }

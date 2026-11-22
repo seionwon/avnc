@@ -45,13 +45,15 @@ fun getClipboard(context: Context): ClipboardManager {
 /**
  * Puts given text on the clipboard.
  */
-suspend fun setClipboardText(context: Context, text: String): Boolean {
+suspend fun setClipboardText(context: Context, text: String, permitted: () -> Boolean = { true }): Boolean {
     var success = false
     try {
         withContext(Dispatchers.Main.immediate) { getClipboard(context) }.let {
             withContext(Dispatchers.IO) {
-                it.setPrimaryClip(ClipData.newPlainText(null, text))
-                success = true
+                if (permitted()) {
+                    it.setPrimaryClip(ClipData.newPlainText(null, text))
+                    success = true
+                }
             }
         }
     } catch (e: CancellationException) {
@@ -66,12 +68,12 @@ suspend fun setClipboardText(context: Context, text: String): Boolean {
 /**
  * Returns current clipboard text.
  */
-suspend fun getClipboardText(context: Context): String? {
+suspend fun getClipboardText(context: Context, permitted: () -> Boolean): String? {
     var result: String? = null
     try {
         withContext(Dispatchers.Main.immediate) { getClipboard(context) }.let {
             withContext(Dispatchers.IO) {
-                result = it.primaryClip?.getItemAt(0)?.text?.toString()
+                if (permitted()) result = it.primaryClip?.getItemAt(0)?.text?.toString()
             }
         }
     } catch (e: CancellationException) {

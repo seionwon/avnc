@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="database" path="." />
+    <exclude domain="file" path="known-hosts" />
+    <exclude domain="file" path="trusted_certs" />
+    <exclude domain="sharedpref" path="clipboard_consent.xml" />
+</full-backup-content>

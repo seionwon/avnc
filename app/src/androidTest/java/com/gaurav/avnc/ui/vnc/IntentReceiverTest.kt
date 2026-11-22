@@ -29,6 +29,7 @@ import com.gaurav.avnc.TestServer
 import com.gaurav.avnc.checkIsDisplayed
 import com.gaurav.avnc.checkWillBeDisplayed
 import com.gaurav.avnc.model.ServerProfile
+import com.gaurav.avnc.doClick
 import com.gaurav.avnc.onToast
 import com.gaurav.avnc.pollingAssert
 import com.gaurav.avnc.targetContext
@@ -115,7 +116,8 @@ class IntentReceiverTest {
     @SdkSuppress(maxSdkVersion = 29)
     fun saveUri() {
         ActivityScenario.launch<Activity>(newUriIntent("vnc://localhost?ConnectionName=Test&SaveConnection=true"))
-        assertToastIsShown(withSubstring("Added new server for URI"))
+        onView(withText(android.R.string.ok)).doClick()
+        assertToastIsShown(withText(R.string.msg_link_added))
 
         val profiles = runBlocking { dbRule.db.serverProfileDao.getList() }
         assertEquals(1, profiles.size)
@@ -127,7 +129,8 @@ class IntentReceiverTest {
     @SdkSuppress(maxSdkVersion = 29)
     fun saveUriWithoutExplicitName() {
         ActivityScenario.launch<Activity>(newUriIntent("vnc://localhost/?SaveConnection=true"))
-        assertToastIsShown(withSubstring("Added new server for URI"))
+        onView(withText(android.R.string.ok)).doClick()
+        assertToastIsShown(withText(R.string.msg_link_added))
 
         val profiles = runBlocking { dbRule.db.serverProfileDao.getList() }
         assertEquals(1, profiles.size)
@@ -136,16 +139,27 @@ class IntentReceiverTest {
     }
 
     @Test
-    fun updateProfileWithUri() {
+    fun cancelledSaveLeavesProfileListEmpty() {
+        ActivityScenario.launch<Activity>(newUriIntent("vnc://localhost?SaveConnection=true")).use {
+            onView(withText(android.R.string.cancel)).doClick()
+            pollingAssert { assertEquals(Lifecycle.State.DESTROYED, it.state) }
+        }
+        assertEquals(0, runBlocking { dbRule.db.serverProfileDao.getList() }.size)
+    }
+
+    @Test
+    fun linkCannotReplaceSavedProfile() {
         runBlocking { dbRule.db.serverProfileDao.save(ServerProfile(name = "Test", host = "10.0.0.1", password = "Hello")) }
-        ActivityScenario.launch<Activity>(newUriIntent("vnc://localhost?SaveConnection=true&ConnectionName=Test&VncPassword=World"))
-                .use { }
+        ActivityScenario.launch<Activity>(newUriIntent("vnc://localhost?SaveConnection=true&ConnectionName=Test")).use {
+            onView(withText(android.R.string.ok)).doClick()
+            pollingAssert { assertEquals(Lifecycle.State.DESTROYED, it.state) }
+        }
 
         val profiles = runBlocking { dbRule.db.serverProfileDao.getList() }
         assertEquals(1, profiles.size)
         assertEquals("Test", profiles.first().name)
-        assertEquals("localhost", profiles.first().host)
-        assertEquals("World", profiles.first().password)
+        assertEquals("10.0.0.1", profiles.first().host)
+        assertEquals("Hello", profiles.first().password)
     }
 
     @Test

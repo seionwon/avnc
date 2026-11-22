@@ -42,7 +42,7 @@ import com.gaurav.avnc.ui.vnc.input.InputHandler
 import com.gaurav.avnc.util.AppPreferences
 import com.gaurav.avnc.util.addOnGlobalLayoutListener
 import com.gaurav.avnc.util.isTrue
-import com.gaurav.avnc.util.toggleKeyboard
+import com.gaurav.avnc.util.showKeyboard
 import kotlin.math.min
 import kotlin.math.sign
 
@@ -67,14 +67,25 @@ class VirtualKeys(private val activity: VncActivity, private val inputHandler: I
 
     val container: View? get() = stub.root
 
+    val isTextBoxActive: Boolean
+        get() {
+            val b = stub.binding as? VirtualKeysBinding ?: return false
+            return container?.isVisible == true && b.pager.currentItem == 1
+        }
+
+    val activeTextBox: EditText?
+        get() = if (isTextBoxActive) (stub.binding as? VirtualKeysBinding)?.textBox else null
+
     fun show(saveVisibility: Boolean = false) {
         init()
         container?.visibility = View.VISIBLE
+        updateTextBoxFocusability()
         if (saveVisibility) pref.runInfo.showVirtualKeys = true
     }
 
     fun hide(saveVisibility: Boolean = false) {
         container?.visibility = View.GONE
+        updateTextBoxFocusability()
         openedWithKb = false //Reset flag
         if (saveVisibility) pref.runInfo.showVirtualKeys = false
     }
@@ -97,7 +108,28 @@ class VirtualKeys(private val activity: VncActivity, private val inputHandler: I
         // the TextBox also sees that swipe-up and it shows the keyboard. Now tap on Back navigation
         // button will hide the keyboard instead of ending the session. User must switch away from
         // text-page to break this loop. So we clear the focus here to avoid this issue.
-        (stub.binding as? VirtualKeysBinding)?.textBox?.let { if (it.isFocused) it.clearFocus() }
+        (stub.binding as? VirtualKeysBinding)?.textBox?.let {
+            if (it.isFocused) {
+                it.clearFocus()
+                inputView.requestFocus()
+            }
+        }
+    }
+
+    private fun updateTextBoxFocusability() {
+        val b = stub.binding as? VirtualKeysBinding ?: return
+        val active = isTextBoxActive
+        b.textPage.descendantFocusability = if (active) {
+            ViewGroup.FOCUS_AFTER_DESCENDANTS
+        } else {
+            ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        }
+        b.textBox.isFocusable = active
+        b.textBox.isFocusableInTouchMode = active
+        if (!active && b.textBox.isFocused) {
+            b.textBox.clearFocus()
+            inputView.requestFocus()
+        }
     }
 
     fun onConnected() {
@@ -182,11 +214,17 @@ class VirtualKeys(private val activity: VncActivity, private val inputHandler: I
         pager.addOnPageChangeListener(object : ViewPager.SimpleOnPageChangeListener() {
             val textPageIndex = pages.indexOf(binding.textPage)
             override fun onPageSelected(position: Int) {
-                if (ViewCompat.getRootWindowInsets(root)?.isVisible(Type.ime()) == true) {
-                    if (position == textPageIndex) binding.textBox.requestFocus()
-                    else inputView.requestFocus()
-                }
                 pref.runInfo.virtualKeysTextBoxVisible = (position == textPageIndex)
+                updateTextBoxFocusability()
+                if (ViewCompat.getRootWindowInsets(root)?.isVisible(Type.ime()) == true) {
+                    if (position == textPageIndex) {
+                        binding.textBox.requestFocus()
+                        showKeyboard(binding.textBox)
+                    } else {
+                        inputView.requestFocus()
+                        showKeyboard(inputView)
+                    }
+                }
             }
         })
 
@@ -210,6 +248,7 @@ class VirtualKeys(private val activity: VncActivity, private val inputHandler: I
         // Switch to text page if it was active last time
         if (pref.runInfo.virtualKeysTextBoxVisible)
             pager.setCurrentItem(pages.indexOf(binding.textPage), false)
+        updateTextBoxFocusability()
     }
 
 
@@ -237,7 +276,7 @@ class VirtualKeys(private val activity: VncActivity, private val inputHandler: I
             binding.keys.addView(view)
 
             if (vk == VirtualKey.ToggleKeyboard) {
-                view.setOnClickListener { toggleKeyboard(inputView) }
+                view.setOnClickListener { activity.toggleKeyboard() }
             } else if (vk == VirtualKey.CloseKeys) {
                 view.setOnClickListener { hide(true) }
             } else if (vk.keyCode != null) {
@@ -479,6 +518,7 @@ object VirtualKeyViewFactory {
      */
     fun create(context: Context, key: VirtualKey): View {
         val view = if (key.isToggle) createToggle(context, key) else createSimple(context, key)
+        view.isFocusableInTouchMode = false
         view.layoutParams = GridLayout.LayoutParams().apply {
             width = GridLayout.LayoutParams.WRAP_CONTENT
             height = GridLayout.LayoutParams.WRAP_CONTENT

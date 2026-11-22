@@ -32,6 +32,7 @@ import com.gaurav.avnc.DisableAnimationsRule
 import com.gaurav.avnc.EmptyDatabaseRule
 import com.gaurav.avnc.R
 import com.gaurav.avnc.SshTunnelScenario
+import com.gaurav.avnc.VncSessionScenario
 import com.gaurav.avnc.VncSessionTest
 import com.gaurav.avnc.checkDoesNotExist
 import com.gaurav.avnc.checkIsDisplayed
@@ -89,12 +90,25 @@ class LoginFragmentTest : VncSessionTest() {
         }
     }
 
+    private fun accountLogin(saved: Boolean = false, check: VncSessionScenario.() -> Unit) {
+        val tunnel = SshTunnelScenario()
+        forgetKnownHosts(targetContext)
+        tunnel.setupAuthWithPassword("fixture-user", "fixture-password")
+        tunnel.vncSession.server.setupDHAuth(SAMPLE_USERNAME, SAMPLE_PASSWORD)
+        if (saved) tunnel.vncSession.saveProfileToDB(dbRule.db)
+        try {
+            tunnel.start()
+            tunnel.checkAndTrustHostFingerprint()
+            tunnel.vncSession.check()
+        } finally {
+            tunnel.stop()
+        }
+    }
+
     @Test
+    @SdkSuppress(minSdkVersion = 26)
     fun vncUsernameAndPasswordLogin() {
-        vncSession.apply {
-            server.setupDHAuth(SAMPLE_USERNAME, SAMPLE_PASSWORD)
-            startServer()
-            startActivity()
+        accountLogin {
 
             onView(withId(R.id.username)).inDialog().checkWillBeDisplayed().doTypeText(SAMPLE_USERNAME)
             onView(withId(R.id.password)).inDialog().checkIsDisplayed().doTypeText(SAMPLE_PASSWORD)
@@ -102,17 +116,13 @@ class LoginFragmentTest : VncSessionTest() {
             onView(withText(android.R.string.ok)).inDialog().checkIsDisplayed().doClick()
 
             assertConnected()
-            stop()
         }
     }
 
     @Test
+    @SdkSuppress(minSdkVersion = 26)
     fun rememberLoginDetails() {
-        vncSession.apply {
-            saveProfileToDB(dbRule.db)
-            server.setupDHAuth(SAMPLE_USERNAME, SAMPLE_PASSWORD)
-            startServer()
-            startActivity()
+        accountLogin(saved = true) {
 
             onView(withId(R.id.username)).inDialog().checkWillBeDisplayed().doTypeText(SAMPLE_USERNAME)
             onView(withId(R.id.password)).inDialog().checkIsDisplayed().doTypeText(SAMPLE_PASSWORD)
@@ -125,11 +135,11 @@ class LoginFragmentTest : VncSessionTest() {
                 assertEquals(SAMPLE_USERNAME, saved?.username)
                 assertEquals(SAMPLE_PASSWORD, saved?.password)
             }
-            stop()
         }
     }
 
     @Test
+    @SdkSuppress(minSdkVersion = 26)
     fun autocomplete() {
         runBlocking {
             dbRule.db.serverProfileDao.save(listOf(
@@ -137,10 +147,7 @@ class LoginFragmentTest : VncSessionTest() {
                     ServerProfile(name = "N2", host = "H2", username = "U2", password = SAMPLE_PASSWORD),
             ))
         }
-        vncSession.apply {
-            server.setupDHAuth(SAMPLE_USERNAME, SAMPLE_PASSWORD)
-            startServer()
-            startActivity()
+        accountLogin {
 
             onView(withText(R.string.title_vnc_login)).inDialog().checkWillBeDisplayed()
 
@@ -165,7 +172,6 @@ class LoginFragmentTest : VncSessionTest() {
 
             onView(withText(android.R.string.ok)).doClick()
             assertConnected()
-            stop()
         }
     }
 

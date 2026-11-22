@@ -40,6 +40,7 @@ class LoginFragment : DialogFragment() {
     private val viewModel by activityViewModels<VncViewModel>()
     private val loginType by lazy { viewModel.loginInfoRequest.value!! }
     private val loginInfo by lazy { getLoginInfoFromProfile(viewModel.profile) }
+    private var selectedPasswordLabel: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -132,6 +133,9 @@ class LoginFragment : DialogFragment() {
             if (passwords.isNotEmpty()) {
                 val passwordAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_list_item_1, passwords)
                 binding.password.setAdapter(passwordAdapter)
+                binding.password.setOnItemClickListener { parent, _, position, _ ->
+                    selectedPasswordLabel = parent.getItemAtPosition(position) as? String
+                }
                 binding.passwordLayout.endIconMode = TextInputLayout.END_ICON_DROPDOWN_MENU
             }
         }
@@ -166,5 +170,6 @@ class LoginFragment : DialogFragment() {
 
     }
 
-    private fun getRealPassword(typedPassword: String) = passwordMap[typedPassword] ?: typedPassword
+    private fun getRealPassword(typedPassword: String): String =
+            if (typedPassword == selectedPasswordLabel) passwordMap[typedPassword] ?: typedPassword else typedPassword
 }

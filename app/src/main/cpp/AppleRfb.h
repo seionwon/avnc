@@ -21,9 +21,8 @@ extern "C" {
  * Display configuration modes matching macOS Screen Sharing options.
  */
 typedef enum {
-    APPLE_DISPLAY_STANDARD = 0,   // Physical displays (no virtual display creation)
-    APPLE_DISPLAY_VIRTUAL_1 = 1,  // High Performance: 1 Virtual Display
-    APPLE_DISPLAY_VIRTUAL_2 = 2   // High Performance: 2 Virtual Displays
+    APPLE_DISPLAY_STANDARD = 0,   // Physical displays (single monitor selectable, up to 6)
+    APPLE_DISPLAY_VIRTUAL_1 = 1   // High Performance: 1 Virtual Display
 } AppleDisplayMode;
 
 /**
@@ -37,6 +36,7 @@ typedef enum {
 
 #define APPLE_ALL_DISPLAYS_WIRE 0xffffffffu
 #define APPLE_MAX_LAYOUT_DISPLAYS 25
+#define APPLE_MAX_SELECTABLE_DISPLAYS 6
 
 #define APPLE_DISPLAY_FLAG_MAIN     0x01u
 #define APPLE_DISPLAY_FLAG_MIRRORED 0x02u
@@ -71,12 +71,13 @@ typedef struct {
 
 typedef struct {
     int securityType;         // 0 = Auto, 30 = macOS/ARD
+    bool authenticatedTunnel;
     int imageQuality;         // 0..9
     bool useRawEncoding;
     bool useLocalCursor;
     bool viewOnly;
     AppleDisplayMode displayMode;
-    int initialDisplayIndex;  // 0 = All Displays, 1 = Display 1, 2 = Display 2, ...
+    int initialDisplayIndex;  // 1..6 (single display only; <= 0 defaults to 1)
     int virtualWidth;         // Logical width in points (default 1920)
     int virtualHeight;        // Logical height in points (default 1080)
     double virtualDensity;    // 1.0 or 2.0 (default 1.0)
@@ -114,6 +115,8 @@ typedef struct {
     void (*onBell)(void *userCtx);
     void (*logInfo)(const char *fmt, ...);
     void (*logError)(const char *fmt, ...);
+    // Optional destination row range of each decoded pixel rectangle.
+    void (*onFramebufferRect)(void *userCtx, int y, int height);
 } AppleRfbCallbacks;
 
 typedef struct AppleRfbClient AppleRfbClient;

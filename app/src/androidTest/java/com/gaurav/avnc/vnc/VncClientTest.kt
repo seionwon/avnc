@@ -122,15 +122,16 @@ class VncClientTest {
     }
 
     @Test
-    fun dhAuth() {
+    fun directLegacyAccountLoginIsRejected() {
         val testUsername = "Ross"
         val testPassword = "Pivot!"
         server.setupDHAuth(testUsername, testPassword)
         observer.username = testUsername
         observer.password = testPassword
 
-        connect()
-        assertTrue(client.connected)
+        server.start()
+        org.junit.Assert.assertThrows(java.io.IOException::class.java) { client.connect(server.host, server.port) }
+        org.junit.Assert.assertFalse(client.connected)
 
         client.cleanup()
         server.awaitStop()

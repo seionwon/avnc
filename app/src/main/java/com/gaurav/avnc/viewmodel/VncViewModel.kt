@@ -31,12 +31,15 @@ import com.gaurav.avnc.ui.vnc.FrameState
 import com.gaurav.avnc.ui.vnc.FrameView
 import com.gaurav.avnc.ui.vnc.input.MacKeyboardSync
 import com.gaurav.avnc.util.LiveRequest
+import com.gaurav.avnc.util.LiveEvent
+import com.gaurav.avnc.util.CertificateTrust
+import com.gaurav.avnc.util.certificateFingerprint
+import com.gaurav.avnc.util.certificateTrust
 import com.gaurav.avnc.util.Tones
 import com.gaurav.avnc.util.debugCheck
 import com.gaurav.avnc.util.getClipboardText
 import com.gaurav.avnc.util.getKnownHostsFile
 import com.gaurav.avnc.util.getUnknownCertificateMessage
-import com.gaurav.avnc.util.isCertificateTrusted
 import com.gaurav.avnc.util.isTrue
 import com.gaurav.avnc.util.monitor
 import com.gaurav.avnc.util.setClipboardText
@@ -223,6 +226,13 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
      * This request accepts two strings: First is used as title, second contains the message.
      */
     val confirmationRequest = LiveRequest<Pair<String, String>, Boolean>()
+    val clipboardConsentRequest = LiveEvent<String>()
+    val clipboardSessionId = java.util.UUID.randomUUID().toString()
+    private val clipboardConsents by lazy { app.getSharedPreferences("clipboard_consent", Context.MODE_PRIVATE) }
+    private var clipboardConsentKey: String? = null
+    private var certificateIdentity: String? = null
+    private var clipboardConsentRequested = false
+    @Volatile private var clipboardTarget: Messenger? = null
 
     /**
      * If user has asked to remember credentials in login dialog, we need to
@@ -253,6 +263,7 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
+        clipboardTarget = null
         clipboardRestoreJob?.cancel()
         macKeyboardSync.reset()
         session.stop()
@@ -346,16 +357,40 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
      * Miscellaneous
      **************************************************************************/
 
+    fun checkClipboardConsent() {
+        if (!connected || !pref.server.clipboardSync || clipboardConsentRequested) return
+        clipboardConsentRequested = true
+        if (clipboardConsentKey?.let { clipboardConsents.getBoolean(it, false) } == true)
+            clipboardTarget = messenger
+        else {
+            val message = if (clipboardConsentKey == null) R.string.msg_allow_clipboard_once else R.string.msg_allow_clipboard
+            clipboardConsentRequest.fire(app.getString(message, profile.endpointDescription()))
+        }
+    }
+
+    fun allowClipboard(sessionId: String?) {
+        if (!connected || !clipboardConsentRequested || sessionId != clipboardSessionId || !pref.server.clipboardSync) return
+        clipboardConsentKey?.let { clipboardConsents.edit().putBoolean(it, true).apply() }
+        clipboardTarget = messenger
+        sendClipboardText()
+    }
+
+    private fun canShareWith(target: Messenger) = clipboardTarget === target && pref.server.clipboardSync &&
+            clipboardConsentKey?.let { clipboardConsents.getBoolean(it, false) } != false
+
     fun sendClipboardText() {
-        if (pref.server.clipboardSync && connected) launchIO {
-            getClipboardText(app)?.let { messenger?.sendClipboardText(it) }
+        val target = clipboardTarget ?: return
+        if (canShareWith(target)) launchIO {
+            val permitted = { canShareWith(target) }
+            val text = getClipboardText(app, permitted) ?: return@launchIO
+            target.sendClipboardText(text, permitted)
         }
     }
 
     private var clipReceiverJob: Job? = null
     private fun receiveClipboardText(text: String) {
-        if (!pref.server.clipboardSync)
-            return
+        val target = clipboardTarget ?: return
+        if (!canShareWith(target)) return
 
         // This is a protective measure against servers which send every 'selection' made on the server.
         // Setting clip text involves IPC, so these events can exhaust Binder resources, leading to ANRs.
@@ -365,7 +400,7 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
         }
 
         clipReceiverJob = launchIO {
-            setClipboardText(app, text)
+            setClipboardText(app, text) { canShareWith(target) }
         }
     }
 
@@ -550,11 +585,15 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
             state.postValue(State.Connecting)
         }
 
-        override fun onConnected(vncClient: VncClient, messenger: Messenger) {
+        override fun onConnected(vncClient: VncClient, messenger: Messenger, sshHostKey: ByteArray?) {
             launchMain {
                 this@VncViewModel.client = vncClient
                 this@VncViewModel.messenger = messenger
+                val sshIdentity = sshHostKey?.let { java.security.MessageDigest.getInstance("SHA-256").digest(it).toHexString() }
+                if (sshIdentity != null || certificateIdentity != null)
+                    clipboardConsentKey = "${profile.endpointKey()}|${profile.securityType}|${profile.username}|${sshIdentity.orEmpty()}|${certificateIdentity.orEmpty()}"
                 state.value = State.Connected
+                checkClipboardConsent()
 
                 if (vncClient.isAppleKeyboardSyncSupported) {
                     // Always place macOS on a non-IME layout (ABC/US) on connect so Android's
@@ -575,6 +614,8 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
         override fun onDisconnected() {
             // Block until main thread is synchronised with disconnected state
             runBlocking(Dispatchers.Main) {
+                clipboardTarget = null
+                clipReceiverJob?.cancel()
                 clipboardRestoreJob?.cancel()
                 clipboardRestoreJob = null
                 macKeyboardSync.reset()
@@ -610,17 +651,25 @@ class VncViewModel(app: Application) : BaseViewModel(app) {
         }
 
         override fun verifyVncServerCertificate(certificate: X509Certificate): Boolean {
-            if (isCertificateTrusted(app, certificate))
-                return true
-
-            val title = "Unknown server certificate"
-            val message = getUnknownCertificateMessage(certificate)
-            if (confirmationRequest.getResponseFor(Pair(title, message), viewModelScope)) {
-                trustCertificate(app, certificate)
-                return true
+            try {
+                certificate.checkValidity()
+                val accepted = when (certificateTrust(app, profile, certificate)) {
+                    CertificateTrust.Trusted -> true
+                    CertificateTrust.Changed -> false
+                    CertificateTrust.Unknown -> {
+                        val title = app.getString(R.string.title_verify_certificate)
+                        val message = getUnknownCertificateMessage(app, profile, certificate)
+                        confirmationRequest.getResponseFor(Pair(title, message), viewModelScope) &&
+                            trustCertificate(app, profile, certificate)
+                    }
+                }
+                if (accepted) certificateIdentity = certificateFingerprint(certificate).toHexString()
+                return accepted
+            } catch (_: java.security.cert.CertificateException) {
+                return false
+            } catch (_: IOException) {
+                return false
             }
-
-            return false
         }
 
         override fun onFramebufferUpdated() {
