@@ -513,7 +513,7 @@ macOS 내장 Screen Sharing(`RFB 3.889`) 접속 환경에서 발생한 세 가�
 | --- | --- |
 | ID | `hist-20261125-001` |
 | 변경 유형 | 성능 개선 (`app/build.gradle.kts`) |
-| 상태 | 로컬 빌드 및 산출물 검증 완료 · 실기기 미측정 · 미배포 |
+| 상태 | 로컬 빌드 및 산출물 검증 완료 · 실기기 미측정 · GitHub 릴리스 `v3.3.10-seionwon`으로 배포 |
 
 #### 1. 기능 목적
 
@@ -545,5 +545,6 @@ CodeMemo 실행 탭에서 내려받는 설치용 APK는 디버그 빌드입니�
 - 연결된 기기나 에뮬레이터가 없어 실기기 설치, 실제 FPS·지연·배터리 변화는 측정하지 않았습니다. 속도 향상 폭은 수치로 확인하지 못했습니다.
 - 계측 테스트 가운데 `mockk` 인라인 모킹을 쓰는 테스트는 `-PavncDebuggable`을 붙여 실행해야 합니다.
 - Kotlin 코드 축소(R8)는 기기에서 검증할 수 없어 적용하지 않았습니다.
+- 이 변경은 2026-11-25 01:42 +09:00에 `master`에 커밋·푸시해 GitHub 릴리스 [`v3.3.10-seionwon`](https://github.com/seionwon/avnc/releases/tag/v3.3.10-seionwon)으로 배포했습니다(`AVNC-v3.3.10-seionwon.apk`, `10,155,988 bytes`).
 
 
