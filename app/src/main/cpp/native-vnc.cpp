@@ -471,7 +471,7 @@ static void appleOnKeyboardSourceChanged(void *userCtx, const char *sourceId,
     auto env = context.getEnv();
     auto cls = context.managedCls;
 
-    jstring jSourceId = env->NewStringUTF(sourceId ? sourceId : "");
+    jstring jSourceId = newStringFromUntrustedUtf8(env, sourceId);
     if (!jSourceId) return;
 
     jmethodID mid = env->GetMethodID(cls, "cbKeyboardSourceChanged", "(Ljava/lang/String;ZZ)V");
@@ -930,9 +930,9 @@ Java_com_gaurav_avnc_vnc_VncClient_nativeGetDesktopName(JNIEnv *env, jobject /*t
     auto client = (rfbClient *) client_ptr;
     auto ex = getClientExtension(client);
     if (ex->appleClient) {
-        return env->NewStringUTF(appleRfbGetDesktopName(ex->appleClient));
+        return newStringFromUntrustedUtf8(env, appleRfbGetDesktopName(ex->appleClient));
     }
-    return env->NewStringUTF(client->desktopName ? client->desktopName : "");
+    return newStringFromUntrustedUtf8(env, client->desktopName);
 }
 
 extern "C"

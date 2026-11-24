@@ -23,6 +23,7 @@ import com.gaurav.avnc.ui.about.AboutActivity
 import com.gaurav.avnc.ui.prefs.PrefsActivity
 import com.gaurav.avnc.ui.vnc.startVncActivity
 import com.gaurav.avnc.util.Debugging
+import com.gaurav.avnc.util.DeviceAuthPrompt
 import com.gaurav.avnc.util.EdgeToEdgeHelper
 import com.gaurav.avnc.viewmodel.HomeViewModel
 import com.google.android.material.snackbar.Snackbar
@@ -36,9 +37,11 @@ class HomeActivity : AppCompatActivity() {
     val viewModel by viewModels<HomeViewModel>()
     private lateinit var binding: ActivityHomeBinding
     private val tabs = ServerTabs(this)
+    private val editorUnlockPrompt = DeviceAuthPrompt(this)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(R.style.App_Theme)
+        DeviceAuthPrompt.applyFingerprintDialogFix(supportFragmentManager)
         super.onCreate(savedInstanceState)
         window.requestFeature(Window.FEATURE_ACTIVITY_TRANSITIONS)
 
@@ -52,6 +55,10 @@ class HomeActivity : AppCompatActivity() {
         binding.navigationBtn.setOnClickListener { binding.drawerLayout.open() }
         binding.settingsBtn.setOnClickListener { showSettings() }
         binding.urlbar.setOnClickListener { showUrlActivity() }
+
+        editorUnlockPrompt.init(
+                onSuccess = { (it as? ServerProfile)?.let { profile -> openProfileEditor(profile) } },
+                onFail = { Snackbar.make(binding.root, it, Snackbar.LENGTH_LONG).show() })
 
         //Observers
         viewModel.editProfileEvent.observe(this) { showProfileEditor(it) }
@@ -119,7 +126,23 @@ class HomeActivity : AppCompatActivity() {
         startActivity(Intent(this, UrlBarActivity::class.java), anim.toBundle())
     }
 
+    /**
+     * The editor can reveal saved secrets and start a session with them, so with
+     * the saved-server lock on it needs the same authentication as connecting.
+     */
     private fun showProfileEditor(profile: ServerProfile) {
+        val holdsSavedData = profile.isSaved() || profile.password.isNotEmpty() ||
+                             profile.sshPassword.isNotEmpty() || profile.sshPrivateKey.isNotEmpty()
+        if (!holdsSavedData || !viewModel.pref.server.lockSavedServer) {
+            openProfileEditor(profile)
+        } else if (!editorUnlockPrompt.canLaunch()) {
+            Snackbar.make(binding.root, R.string.err_device_auth_unavailable, Snackbar.LENGTH_LONG).show()
+        } else if (!editorUnlockPrompt.hasLaunched()) {
+            editorUnlockPrompt.launch(getString(R.string.title_unlock_dialog), profile)
+        }
+    }
+
+    private fun openProfileEditor(profile: ServerProfile) {
         startProfileEditor(this, profile, viewModel.pref.ui.preferAdvancedEditor)
     }
 

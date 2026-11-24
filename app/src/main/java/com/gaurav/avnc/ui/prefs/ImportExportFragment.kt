@@ -197,8 +197,10 @@ class ImportExportFragment : Fragment() {
             if (it.isNotEmpty())
                 showMsg(it)
         }.onFailure {
-            MsgDialog.show(childFragmentManager, "Error", it.message ?: "An error occurred")
-            Log.e(javaClass.simpleName, "Import/Export error", it)
+            // Parser errors quote the backup they failed on, which may hold passwords and keys.
+            val msg = if (it is java.io.IOException) it.message else null
+            MsgDialog.show(childFragmentManager, "Error", msg ?: getString(R.string.msg_import_export_failed))
+            Log.e(javaClass.simpleName, "Import/Export error: ${it.javaClass.name}")
         }
     }
 

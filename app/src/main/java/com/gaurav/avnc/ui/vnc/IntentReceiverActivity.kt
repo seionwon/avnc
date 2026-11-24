@@ -82,6 +82,8 @@ class IntentReceiverActivity : AppCompatActivity() {
             }
             profile.ID = id
             toast(getString(R.string.msg_link_added))
+        } else if (!confirmConnect(profile)) {
+            return
         }
         startVncActivity(this, profile)
     }
@@ -91,6 +93,21 @@ class IntentReceiverActivity : AppCompatActivity() {
         else startVncActivity(this, ServerProfile(ID = profileId))
     }
 
+
+    /**
+     * A link can come from any web page or app, so the user sees where it leads
+     * before a connection (and a possible password prompt) starts.
+     */
+    private suspend fun confirmConnect(profile: ServerProfile): Boolean = suspendCancellableCoroutine { result ->
+        val dialog = MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.title_open_link)
+                .setMessage(getString(R.string.msg_open_link, profile.endpointDescription()))
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.resume(true) }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> result.resume(false) }
+                .setOnCancelListener { result.resume(false) }
+                .show()
+        result.invokeOnCancellation { dialog.dismiss() }
+    }
 
     private suspend fun confirmSave(profile: ServerProfile): Boolean = suspendCancellableCoroutine { result ->
         val dialog = MaterialAlertDialogBuilder(this)

@@ -248,4 +248,7 @@
     <string name="title_display_numbered_with_size">디스플레이 %1$d (%2$d×%3$d)</string>
     <string name="desc_display_options_toggle">디스플레이 전환</string>
     <string name="msg_apple_display_mode_help">macOS 내장 화면 공유(macOS 사용자 계정 로그인)에서 동작합니다.\n\n• <b>표준</b>: Mac에 연결된 물리 모니터(최대 6개) 중 하나를 선택해 접속합니다.\n• <b>고성능: 가상 디스플레이 1개</b>: Apple Silicon Mac(macOS Sonoma 이상)에 단일 가상 디스플레이를 생성합니다.\n\n<b>초기 디스플레이</b>에서 디스플레이 1~6 중 하나를 지정하거나, 접속 후 뷰어 도구 모음의 디스플레이 버튼에서 1개 디스플레이를 실시간으로 전환할 수 있습니다.</string>
+    <string name="title_open_link">이 링크를 열까요?</string>
+    <string name="msg_open_link">이 링크는 다음 서버에 연결합니다.\n\n%1$s\n\n신뢰하는 서버일 때만 계속하세요.</string>
+    <string name="msg_import_export_failed">작업에 실패했습니다. 파일이 손상되었거나 지원하지 않는 형식일 수 있습니다.</string>
 </resources>

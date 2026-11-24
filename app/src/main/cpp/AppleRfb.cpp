@@ -68,7 +68,10 @@ static const size_t kRecordMaxSize      = 65520;
 static const size_t kRecordMaxBody      = kRecordMaxSize - 2 - kRecordChecksumSize;
 static const size_t kRekeyBodySize      = 36;
 static const size_t kMaxCompressedRect  = 64u * 1024u * 1024u;
-static const size_t kMaxCursorSize      = 1024;
+static const size_t kMaxCursorSize      = 512;
+// Decoder output above this is released after use, so one oversized rect cannot pin memory.
+static const size_t kMaxRetainedDecoderBytes = 16u * 1024u * 1024u;
+static const uint64_t kMaxSrpIterations = 1000000ULL;
 static const size_t kMaxCursorCache     = 64;
 
 static const int kVirtualDisplayLargestSide = 16384;
@@ -193,6 +196,21 @@ struct ZlibDecoder {
     uint8_t *outBuf;
     size_t outCap;
 };
+
+// Clears key material on every exit path, including early returns and gotos.
+struct WipeOnExit {
+    void *ptr;
+    size_t len;
+    ~WipeOnExit() { OPENSSL_cleanse(ptr, len); }
+};
+
+static void zlibDecoderTrim(ZlibDecoder *d) {
+    if (d->outCap > kMaxRetainedDecoderBytes) {
+        free(d->outBuf);
+        d->outBuf = nullptr;
+        d->outCap = 0;
+    }
+}
 
 static void zlibDecoderFree(ZlibDecoder *d) {
     if (d->initialized) {
@@ -475,6 +493,12 @@ static bool serverAccepts(const AppleRfbClient *c, uint8_t msgType) {
     size_t idx = msgType / 8u;
     if (idx >= sizeof(c->serverCommands)) return false;
     return (c->serverCommands[idx] & (uint8_t) (0x80u >> (msgType % 8u))) != 0;
+}
+
+// An encrypted session accepts clipboard text only once the record layer authenticates it;
+// anything earlier could have been injected into the cleartext prelude.
+static bool clipboardIsAuthenticated(const AppleRfbClient *c) {
+    return !c->hasWrapKey || c->recordReadActive;
 }
 
 static bool supportsApplePasteboard(const AppleRfbClient *c) {
@@ -1347,7 +1371,7 @@ static bool runSrpExchange(AppleRfbClient *c, const char *password,
     if (!(options = take(optLen))) goto cleanup;
 
     if (modLen < 256 || modLen > 1024 || genLen == 0 || genLen > modLen ||
-        srvPubLen == 0 || srvPubLen > modLen || saltLen == 0 || iterations == 0 || iterations > 10000000ULL) {
+        srvPubLen == 0 || srvPubLen > modLen || saltLen == 0 || iterations == 0 || iterations > kMaxSrpIterations) {
         logErr(c, "AppleRfb: invalid SRP parameters (mod=%u, iter=%llu)",
                (unsigned) modLen, (unsigned long long) iterations);
         c->lastErrno = EPROTO;
@@ -1375,6 +1399,7 @@ static bool runSrpExchange(AppleRfbClient *c, const char *password,
 
     {
         uint8_t derived[128];
+        WipeOnExit derivedWipe{derived, sizeof(derived)};
         if (PKCS5_PBKDF2_HMAC(password, (int) strlen(password),
                               salt, (int) saltLen, (int) iterations,
                               EVP_sha512(), sizeof(derived), derived) != 1) {
@@ -1390,6 +1415,7 @@ static bool runSrpExchange(AppleRfbClient *c, const char *password,
         const uint8_t *xParts[2] = {salt, innerHash};
         const size_t xLens[2] = {saltLen, sizeof(innerHash)};
         uint8_t xHash[64];
+        WipeOnExit xHashWipe{xHash, sizeof(xHash)};
         if (!computeSha512Parts(xParts, xLens, 2, xHash)) goto cleanup;
         bnX = BN_bin2bn(xHash, sizeof(xHash), nullptr);
 
@@ -1400,6 +1426,7 @@ static bool runSrpExchange(AppleRfbClient *c, const char *password,
         bnK = BN_bin2bn(kHash, sizeof(kHash), nullptr);
 
         uint8_t randPriv[64];
+        WipeOnExit randPrivWipe{randPriv, sizeof(randPriv)};
         if (RAND_bytes(randPriv, sizeof(randPriv)) != 1) goto cleanup;
         bnA = BN_bin2bn(randPriv, sizeof(randPriv), nullptr);
 
@@ -1430,6 +1457,7 @@ static bool runSrpExchange(AppleRfbClient *c, const char *password,
         if (!bnToFixedBytes(bnS, sPad, modLen)) goto cleanup;
 
         uint8_t sessionKey[64];
+        WipeOnExit sessionKeyWipe{sessionKey, sizeof(sessionKey)};
         if (!computeDigest(EVP_sha512(), sPad, modLen, sessionKey, 64)) goto cleanup;
 
         uint8_t hN[64], hG[64], hXor[64], hEmpty[64];
@@ -1473,6 +1501,7 @@ static bool runSrpExchange(AppleRfbClient *c, const char *password,
         }
 
         uint8_t sha256Key[32];
+        WipeOnExit sha256KeyWipe{sha256Key, sizeof(sha256Key)};
         if (!computeDigest(EVP_sha256(), sessionKey, sizeof(sessionKey), sha256Key, 32))
             goto cleanup;
         memcpy(wrapKeyOut, sha256Key, 16);
@@ -1484,22 +1513,23 @@ cleanup:
     free(gPad);
     free(aPad);
     free(bPad);
+    if (sPad) OPENSSL_cleanse(sPad, modLen);
     free(sPad);
     free(resp);
     free(verifyMsg);
     BN_free(bnN);
     BN_free(bnG);
     BN_free(bnB);
-    BN_free(bnX);
+    BN_clear_free(bnX);
     BN_free(bnK);
-    BN_free(bnA);
+    BN_clear_free(bnA);
     BN_free(bnPubA);
     BN_free(bnU);
     BN_free(bnGx);
     BN_free(bnKgx);
     BN_free(bnBase);
     BN_free(bnExp);
-    BN_free(bnS);
+    BN_clear_free(bnS);
     BN_CTX_free(bnCtx);
     return ok;
 }
@@ -1829,6 +1859,13 @@ static bool authenticateAppleDH(AppleRfbClient *c, const char *username, const c
     if (!bnCtx || !bnPrime || !bnSrvPub || !bnGen || !bnPriv || !bnPub || !bnShared)
         goto cleanup;
 
+    // A public value of 0, 1 or p-1 would make the shared key predictable.
+    if (!BN_is_odd(bnPrime) || BN_is_zero(bnSrvPub) || BN_is_one(bnSrvPub) ||
+        !BN_copy(bnShared, bnPrime) || !BN_sub_word(bnShared, 1) || BN_cmp(bnSrvPub, bnShared) >= 0) {
+        c->lastErrno = EPROTO;
+        goto cleanup;
+    }
+
     BN_set_word(bnGen, gen);
     if (BN_mod_exp(bnPub, bnGen, bnPriv, bnPrime, bnCtx) != 1) goto cleanup;
     if (BN_mod_exp(bnShared, bnSrvPub, bnPriv, bnPrime, bnCtx) != 1) goto cleanup;
@@ -1853,6 +1890,8 @@ static bool authenticateAppleDH(AppleRfbClient *c, const char *username, const c
 cleanup:
     free(primeBytes);
     free(srvPubBytes);
+    if (privBytes) OPENSSL_cleanse(privBytes, keyLen);
+    if (sharedBytes) OPENSSL_cleanse(sharedBytes, keyLen);
     free(privBytes);
     free(pubBytes);
     free(sharedBytes);
@@ -1860,9 +1899,9 @@ cleanup:
     BN_free(bnPrime);
     BN_free(bnSrvPub);
     BN_free(bnGen);
-    BN_free(bnPriv);
+    BN_clear_free(bnPriv);
     BN_free(bnPub);
-    BN_free(bnShared);
+    BN_clear_free(bnShared);
     BN_CTX_free(bnCtx);
     return ok;
 }
@@ -2534,6 +2573,7 @@ static bool handleFramebufferUpdate(AppleRfbClient *c) {
                     return false;
                 }
                 blitBgra(c, rx, ry, rw, rhgt, raw);
+                zlibDecoderTrim(&c->zlibDec);
                 notePixels();
                 break;
             }
@@ -2555,6 +2595,7 @@ static bool handleFramebufferUpdate(AppleRfbClient *c) {
                     return false;
                 }
                 blitAppleThousands(c, rx, ry, rw, rhgt, raw);
+                zlibDecoderTrim(&c->thousandsDec);
                 notePixels();
                 break;
             }
@@ -2578,7 +2619,9 @@ static bool handleFramebufferUpdate(AppleRfbClient *c) {
                     c->lastErrno = EPROTO;
                     return false;
                 }
-                if (!decodeZRLE(c, rx, ry, rw, rhgt, raw, rawLen)) {
+                bool zrleOk = decodeZRLE(c, rx, ry, rw, rhgt, raw, rawLen);
+                zlibDecoderTrim(&c->zrleDec);
+                if (!zrleOk) {
                     logErr(c, "AppleRfb: ZRLE decode failed");
                     c->lastErrno = EPROTO;
                     return false;
@@ -2848,7 +2891,7 @@ static bool handleAppleClipboardSend(AppleRfbClient *c) {
     // Parse Apple pasteboard archive: inspect transient marker and extract UTF-8 plain text
     size_t pos = 0;
     auto readU32 = [&](uint32_t *out) -> bool {
-        if (pos + 4 > archLen) return false;
+        if (archLen - pos < 4) return false;
         *out = be32(archive + pos);
         pos += 4;
         return true;
@@ -2863,7 +2906,7 @@ static bool handleAppleClipboardSend(AppleRfbClient *c) {
         if (!readU32(&flavorCount) || flavorCount > 1024u) break;
         for (uint32_t f = 0; f < flavorCount; ++f) {
             uint32_t typeLen = 0;
-            if (!readU32(&typeLen) || typeLen > 4096u || pos + typeLen > archLen) {
+            if (!readU32(&typeLen) || typeLen > 4096u || typeLen > archLen - pos) {
                 pos = archLen;
                 break;
             }
@@ -2877,13 +2920,13 @@ static bool handleAppleClipboardSend(AppleRfbClient *c) {
             }
             for (uint32_t t = 0; t < tagCount; ++t) {
                 uint32_t kLen = 0, vLen = 0;
-                if (!readU32(&kLen) || pos + kLen > archLen) { pos = archLen; break; }
+                if (!readU32(&kLen) || kLen > archLen - pos) { pos = archLen; break; }
                 pos += kLen;
-                if (!readU32(&vLen) || pos + vLen > archLen) { pos = archLen; break; }
+                if (!readU32(&vLen) || vLen > archLen - pos) { pos = archLen; break; }
                 pos += vLen;
             }
             uint32_t dataLen = 0;
-            if (!readU32(&dataLen) || pos + dataLen > archLen) {
+            if (!readU32(&dataLen) || dataLen > archLen - pos) {
                 pos = archLen;
                 break;
             }
@@ -2901,7 +2944,7 @@ static bool handleAppleClipboardSend(AppleRfbClient *c) {
 
     if (!isTransient) {
         cacheSavedClipboardArchive(c, archive, archLen);
-        if (utf8Ptr && utf8Len > 0 && c->cbs.onCutText) {
+        if (utf8Ptr && utf8Len > 0 && c->cbs.onCutText && clipboardIsAuthenticated(c)) {
             c->cbs.onCutText(c->userCtx, utf8Ptr, (int) utf8Len, true);
         }
     }
@@ -2988,7 +3031,7 @@ bool appleRfbHandleServerMessage(AppleRfbClient *c) {
                 free(text);
                 return false;
             }
-            if (c->cbs.onCutText && len > 0) {
+            if (c->cbs.onCutText && len > 0 && clipboardIsAuthenticated(c)) {
                 c->cbs.onCutText(c->userCtx, text, (int) len, false);
             }
             free(text);
@@ -3141,6 +3184,7 @@ AppleRfbConnectResult appleRfbConnect(int sock, const AppleRfbConfig *config,
 
     char username[128] = {0};
     char password[128] = {0};
+    WipeOnExit passwordWipe{password, sizeof(password)};
     bool authOk = false;
 
     if (!has36 && !has33 && !has30) {
@@ -4009,6 +4053,6 @@ void appleRfbDestroy(AppleRfbClient *c) {
     free(c->readPlainBuf);
     free(c->writeWireBuf);
     free(c->scratchBuf);
-    memset(c, 0, sizeof(*c));
+    OPENSSL_cleanse(c, sizeof(*c));
     free(c);
 }

@@ -502,3 +502,48 @@ macOS 내장 Screen Sharing(`RFB 3.889`) 접속 환경에서 발생한 세 가�
 #### 4. 실제 배포 상태 및 제한 사항
 
 이번 변경은 로컬 소스에 반영했습니다. 실행 환경에서 Gradle의 잠금용 소켓 생성이 제한되어 새 APK를 생성하지 못했습니다. 실기기 FPS와 배터리 사용량은 측정하지 않았습니다.
+
+
+---
+
+<a id="hist-20261125-001"></a>
+### 2026-11-25 01:15:12 +09:00 — 설치용 APK의 실행 속도 최적화 (`v3.3.9-seionwon`)
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `hist-20261125-001` |
+| 변경 유형 | 성능 개선 (`app/build.gradle.kts`) |
+| 상태 | 로컬 빌드 및 산출물 검증 완료 · 실기기 미측정 · 미배포 |
+
+#### 1. 기능 목적
+
+CodeMemo 실행 탭에서 내려받는 설치용 APK는 디버그 빌드입니다. 지금까지 이 APK는 화면 디코더와 암호화 코드가 컴파일러 최적화 없이(`-O0`) 만들어졌고, 최적화되지 않은 디버그용 암호화·JPEG 라이브러리에 연결되어 있었습니다. 앱 자체도 Android가 느린 디버그 모드로 실행하는 상태였습니다. 이 비용을 없애 원격 화면 디코딩과 암호화 연결 처리, 앱 전반의 반응을 빠르게 합니다.
+
+#### 2. 여는 위치 및 사용 방법
+
+- CodeMemo **실행 탭**에서 `app/build/outputs/apk/debug/AVNC-v3.3.9-seionwon.apk`를 내려받아 기존 앱 위에 그대로 설치합니다. 패키지 이름(`com.gaurav.avnc.debug`)과 서명 인증서가 `3.3.8-seionwon`과 같아서 서버 프로필과 설정이 유지됩니다.
+- 별도 설정은 없습니다. 접속하면 자동으로 적용됩니다.
+- 개발 중 디버거, LeakCanary, 계측 테스트의 인라인 모킹이 필요하면 `./gradlew :app:assembleDebug -PavncDebuggable`로 이전과 같은 디버그 빌드를 만듭니다.
+
+#### 3. 변경 내용
+
+- 네이티브 코드(`native-vnc`, `AppleRfb`, `libvncclient`)를 `RelWithDebInfo`(`-O2 -DNDEBUG`)로 빌드하고, 암호화(`libcrypto`, `libssl`)와 JPEG(`libjpeg`) 라이브러리도 최적화된 릴리스판에 연결합니다.
+- 디버그 빌드 유형의 `debuggable`을 기본으로 끕니다. Android가 앱을 일반 앱처럼 최적화해 실행하고, LeakCanary의 누수 감시와 힙 덤프, 디버그 전용 검사(`debugCheck`, 셰이더 프로그램 검증)가 실행되지 않습니다.
+- 기준 프로필(`assets/dexopt/baseline.prof`)이 APK에 포함됩니다.
+- 버전을 `versionCode = 61`, `versionName = "3.3.9-seionwon"`으로 올렸습니다.
+
+#### 4. 검증 결과
+
+- `./gradlew :app:assembleDebug --no-daemon`: 통과. 산출물 `AVNC-v3.3.9-seionwon.apk` (`10,810,628 bytes`, SHA-256 `84362953d25084a46f3b638abc4dd6e657bf77b96858855c9500eb537513d223`).
+- 빌드 설정 확인: `arm64-v8a`의 `CMAKE_BUILD_TYPE=RelWithDebInfo`, 컴파일 플래그 `-O2 -g -DNDEBUG`, 연결 라이브러리가 `vcpkg_installed/arm64-android/lib/`(릴리스판)임을 확인했습니다. 이전 빌드는 `-O` 플래그가 없었고 `debug/lib/`에 연결되어 있었습니다.
+- APK 확인: `application-debuggable` 표시가 없어졌고, 패키지 이름과 서명 인증서 SHA-256이 `3.3.8-seionwon`과 일치합니다. `libnative-vnc.so`는 `arm64-v8a` 4,273,200 → 3,019,296바이트, `armeabi-v7a` 2,623,836 → 2,032,828바이트입니다.
+- `./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin --no-daemon`: JVM 단위 테스트 15/15 통과, 계측 테스트 컴파일 통과.
+
+#### 5. 실제 배포 상태 및 제한 사항
+
+- 로컬 소스와 `app/build/outputs/apk/debug/`의 APK에만 반영했습니다. 커밋, `downloads/` 갱신, GitHub 릴리스는 하지 않았습니다.
+- 연결된 기기나 에뮬레이터가 없어 실기기 설치, 실제 FPS·지연·배터리 변화는 측정하지 않았습니다. 속도 향상 폭은 수치로 확인하지 못했습니다.
+- 계측 테스트 가운데 `mockk` 인라인 모킹을 쓰는 테스트는 `-PavncDebuggable`을 붙여 실행해야 합니다.
+- Kotlin 코드 축소(R8)는 기기에서 검증할 수 없어 적용하지 않았습니다.
+
+

@@ -34,6 +34,54 @@ static char *getNativeStrCopy(JNIEnv *env, jstring jStr) {
 /******************************************************************************
  * Logging
  *****************************************************************************/
+/**
+ * NewStringUTF() requires Modified UTF-8 and may abort or misread on anything else.
+ * Names sent by a server are untrusted, so they are decoded here with replacement.
+ */
+static jstring newStringFromUntrustedUtf8(JNIEnv *env, const char *str) {
+    const auto *s = (const unsigned char *) (str ? str : "");
+    size_t len = strlen((const char *) s);
+    if (len > 1024) len = 1024;
+
+    jchar out[1024];
+    jsize n = 0;
+    size_t i = 0;
+    while (i < len) {
+        uint32_t cp = 0xFFFD;
+        size_t need = 0;
+        unsigned char b = s[i];
+        if (b < 0x80) { cp = b; need = 0; }
+        else if (b >= 0xC2 && b <= 0xDF) { cp = b & 0x1Fu; need = 1; }
+        else if (b >= 0xE0 && b <= 0xEF) { cp = b & 0x0Fu; need = 2; }
+        else if (b >= 0xF0 && b <= 0xF4) { cp = b & 0x07u; need = 3; }
+        else { need = SIZE_MAX; }
+
+        bool valid = need != SIZE_MAX && i + need < len;
+        for (size_t k = 1; valid && k <= need; ++k) {
+            if ((s[i + k] & 0xC0u) != 0x80u) valid = false;
+            else cp = (cp << 6) | (s[i + k] & 0x3Fu);
+        }
+        if (valid && ((need == 2 && cp < 0x800) || (need == 3 && (cp < 0x10000 || cp > 0x10FFFF)) ||
+                      (cp >= 0xD800 && cp <= 0xDFFF)))
+            valid = false;
+
+        if (!valid) {
+            out[n++] = 0xFFFD;
+            i += 1;
+        } else if (cp >= 0x10000) {
+            if (n + 2 > 1024) break;
+            cp -= 0x10000;
+            out[n++] = (jchar) (0xD800 + (cp >> 10));
+            out[n++] = (jchar) (0xDC00 + (cp & 0x3FFu));
+            i += need + 1;
+        } else {
+            out[n++] = (jchar) (cp < 0x20 ? 0xFFFD : cp);
+            i += need + 1;
+        }
+    }
+    return env->NewString(out, n);
+}
+
 const char *LOG_TAG = "NativeVnc";
 
 void log_info(const char *fmt, ...) {

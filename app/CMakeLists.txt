@@ -77,6 +77,9 @@ set(AVNC_NATIVE_SOURCE
 
 add_library(native-vnc SHARED ${AVNC_NATIVE_SOURCE})
 
+# Built without the C++ runtime, so destructors must not pull in exception handling.
+target_compile_options(native-vnc PRIVATE -fno-exceptions)
+
 target_link_libraries(native-vnc vncclient)
 
 find_package(OpenSSL REQUIRED)

@@ -17,8 +17,8 @@ android {
         applicationId = "com.gaurav.avnc"
         minSdk = 21
         targetSdk = 36
-        versionCode = 60
-        versionName = "3.3.8-seionwon"
+        versionCode = 62
+        versionName = "3.3.10-seionwon"
 
         javaCompileOptions {
             annotationProcessorOptions {
@@ -59,6 +59,18 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = " (debug)"
+
+            // This variant is the installer people actually run, so it must not carry debug costs:
+            // an unoptimized decoder, debug crypto/JPEG libraries and ART's debuggable mode.
+            // Pass -PavncDebuggable to get the debugger, LeakCanary and inline mocking back.
+            isDebuggable = project.hasProperty("avncDebuggable")
+            if (!isDebuggable) {
+                externalNativeBuild {
+                    cmake {
+                        arguments += "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+                    }
+                }
+            }
         }
 
         release {
@@ -146,7 +158,10 @@ dependencies {
     implementation("org.connectbot:sshlib:2.2.36")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
-    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
+    // LeakCanary writes heap dumps holding decrypted secrets and exports an activity,
+    // so only the opt-in developer build packages it.
+    val leakCanary = "com.squareup.leakcanary:leakcanary-android:2.14"
+    if (project.hasProperty("avncDebuggable")) debugImplementation(leakCanary) else debugCompileOnly(leakCanary)
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test:runner:1.7.0")
