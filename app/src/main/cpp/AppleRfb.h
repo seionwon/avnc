@@ -212,6 +212,8 @@ int appleRfbGetWidth(const AppleRfbClient *client);
 int appleRfbGetHeight(const AppleRfbClient *client);
 bool appleRfbIsEncrypted(const AppleRfbClient *client);
 bool appleRfbSupportsDisplaySelection(const AppleRfbClient *client);
+/** Whether a layout already contains virtual displays (i.e. a High Performance viewer is active). */
+bool appleRfbLayoutHasVirtualDisplay(const AppleDisplayLayout *layout);
 bool appleRfbSupportsVirtualDisplay(const AppleRfbClient *client);
 bool appleRfbSupportsKeyboardSync(const AppleRfbClient *client);
 bool appleRfbSupportsUtf8Pasteboard(const AppleRfbClient *client);

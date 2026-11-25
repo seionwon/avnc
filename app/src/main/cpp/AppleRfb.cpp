@@ -401,6 +401,16 @@ struct AppleRfbClient {
     int virtualLogicalWidth;
     int virtualLogicalHeight;
 
+    // Virtual displays are one configuration for the whole Mac, shared by every viewer.
+    // We only create or resize them while no other viewer's configuration is in place.
+    bool virtualDecided;        // The first layout has been inspected
+    bool virtualAwaitLayout;    // Our request was sent; the layout showing it has not arrived yet
+    bool hasVirtualSignature;
+    int virtualSeenCount;
+    int virtualSeenWidth;
+    int virtualSeenHeight;
+    uint64_t lastVirtualRequestMs;
+
     // Crypto / Record layer
     uint8_t wrapKey[16];
     bool hasWrapKey;
@@ -2373,6 +2383,77 @@ static bool handleCursorImage(AppleRfbClient *c, uint16_t xHot, uint16_t yHot,
     return true;
 }
 
+static bool sendVirtualDisplayConfig(AppleRfbClient *c, int width, int height) {
+    double density = (c->config.virtualDensity == 2.0) ? 2.0 : 1.0;
+    uint8_t vdMsg[512];
+    size_t vdLen = 0;
+    if (!appleRfbBuildVirtualDisplayMessage(1, width, height, density, 3840, 2160, 60.0, false,
+                                            vdMsg, sizeof(vdMsg), &vdLen))
+        return false;
+    __atomic_store_n(&c->lastVirtualRequestMs, nowMonotonicMs(), __ATOMIC_RELEASE);
+    return streamWrite(c, vdMsg, vdLen);
+}
+
+bool appleRfbLayoutHasVirtualDisplay(const AppleDisplayLayout *layout) {
+    for (uint16_t i = 0; layout && i < layout->count; ++i) {
+        if (layout->displays[i].flags & APPLE_DISPLAY_FLAG_VIRTUAL) return true;
+    }
+    return false;
+}
+
+/**
+ * Decides, from each layout, whether this client may touch the Mac's virtual displays.
+ * Returns false only on a write failure. Sets *requested when a creation request was just sent.
+ */
+static bool reviewVirtualDisplays(AppleRfbClient *c, const AppleDisplayLayout *layout, bool *requested) {
+    *requested = false;
+    c->virtualAwaitLayout = false;
+
+    int count = 0, width = 0, height = 0;
+    for (uint16_t i = 0; i < layout->count; ++i) {
+        if (!(layout->displays[i].flags & APPLE_DISPLAY_FLAG_VIRTUAL)) continue;
+        if (count++ == 0) {
+            width = layout->displays[i].logicalWidth;
+            height = layout->displays[i].logicalHeight;
+        }
+    }
+
+    if (!c->virtualDecided) {
+        c->virtualDecided = true;
+        if (c->config.displayMode != APPLE_DISPLAY_STANDARD && serverAccepts(c, 0x1d)) {
+            if (count > 0) {
+                // Another viewer already runs virtual displays. Replacing them would garble its screen.
+                logInfo(c, "AppleRfb: %d virtual display(s) already in use; joining without reconfiguring", count);
+            } else {
+                logInfo(c, "AppleRfb: requesting 1 virtual display (%dx%d)",
+                        c->virtualLogicalWidth, c->virtualLogicalHeight);
+                if (!sendVirtualDisplayConfig(c, c->virtualLogicalWidth, c->virtualLogicalHeight))
+                    return false;
+                c->activeVirtualDisplays = 1;
+                c->virtualAwaitLayout = true;
+                *requested = true;
+            }
+        }
+    } else if (c->activeVirtualDisplays > 0 && count > 0) {
+        // We only ever ask for one display, and it only changes right after we ask.
+        bool changed = c->hasVirtualSignature &&
+                       (count != c->virtualSeenCount || width != c->virtualSeenWidth || height != c->virtualSeenHeight);
+        bool unprompted = nowMonotonicMs() > __atomic_load_n(&c->lastVirtualRequestMs, __ATOMIC_ACQUIRE) + 3000ULL;
+        if (count > 1 || (changed && unprompted)) {
+            logInfo(c, "AppleRfb: another viewer reconfigured the virtual displays; leaving them alone");
+            c->activeVirtualDisplays = 0;
+        }
+    }
+
+    if (count > 0) {
+        c->hasVirtualSignature = true;
+        c->virtualSeenCount = count;
+        c->virtualSeenWidth = width;
+        c->virtualSeenHeight = height;
+    }
+    return true;
+}
+
 static bool handleDisplayLayout(AppleRfbClient *c) {
     uint16_t len = 0;
     if (!streamReadU16(c, &len)) return false;
@@ -2423,9 +2504,14 @@ static bool handleDisplayLayout(AppleRfbClient *c) {
         c->cbs.onDisplaysChanged(c->userCtx, &layout, supportsSel);
     }
 
+    bool requestedVirtual = false;
+    if (!reviewVirtualDisplays(c, &layout, &requestedVirtual))
+        return false;
+
     // Auto-select a single display (1 of up to 6) whenever the host exposes multiple displays
-    // so the viewer never stays on a combined multi-monitor framebuffer.
-    if (c->running && !c->initialDisplayApplied && supportsSel && layout.count > 1) {
+    // so the viewer never stays on a combined multi-monitor framebuffer. Not while our own
+    // virtual display is still being created: the layout that follows replaces this one.
+    if (c->running && !requestedVirtual && !c->initialDisplayApplied && supportsSel && layout.count > 1) {
         int selectableCount = (layout.count > APPLE_MAX_SELECTABLE_DISPLAYS)
                               ? APPLE_MAX_SELECTABLE_DISPLAYS
                               : (int) layout.count;
@@ -3359,25 +3445,8 @@ AppleRfbConnectResult appleRfbConnect(int sock, const AppleRfbConfig *config,
         if (!streamWrite(c, spf, sizeof(spf))) goto io_error;
     }
 
-    // 10. Optional SetDisplayConfiguration (0x1d) for a single Virtual Display
-    if (c->config.displayMode != APPLE_DISPLAY_STANDARD && serverAccepts(c, 0x1d)) {
-        int requested = 1;
-        double density = (c->config.virtualDensity == 2.0) ? 2.0 : 1.0;
-        uint8_t vdMsg[512];
-        size_t vdLen = 0;
-        if (appleRfbBuildVirtualDisplayMessage(requested,
-                                               c->virtualLogicalWidth,
-                                               c->virtualLogicalHeight,
-                                               density,
-                                               3840, 2160,
-                                               60.0, false,
-                                               vdMsg, sizeof(vdMsg), &vdLen)) {
-            logInfo(c, "AppleRfb: requesting %d virtual display (%dx%d @ %.0fx)",
-                    requested, c->virtualLogicalWidth, c->virtualLogicalHeight, density);
-            if (!streamWrite(c, vdMsg, vdLen)) goto io_error;
-            c->activeVirtualDisplays = requested;
-        }
-    }
+    // 10. A virtual display (0x1d) is requested only after the first DisplayLayout shows that
+    //     no other viewer is using virtual displays. See reviewVirtualDisplays().
 
     // 11. SetEncodings + initial FramebufferUpdateRequest + AutoFrameBufferUpdate
     if (!sendEncodings(c)) goto io_error;
@@ -3422,7 +3491,7 @@ AppleRfbConnectResult appleRfbConnect(int sock, const AppleRfbConfig *config,
     // selection (1 of up to 6) or re-arm framebuffer updates for the actual DisplayLayout dimensions now.
     {
         bool sentInitialSelect = false;
-        if (c->hasLayout && !c->initialDisplayApplied && serverAccepts(c, 0x0d) && c->layout.count > 1) {
+        if (c->hasLayout && !c->virtualAwaitLayout && !c->initialDisplayApplied && serverAccepts(c, 0x0d) && c->layout.count > 1) {
             int selectableCount = (c->layout.count > APPLE_MAX_SELECTABLE_DISPLAYS)
                                   ? APPLE_MAX_SELECTABLE_DISPLAYS
                                   : (int) c->layout.count;
@@ -3952,18 +4021,11 @@ bool appleRfbSetDesktopSize(AppleRfbClient *c, int width, int height) {
     if (width == c->virtualLogicalWidth && height == c->virtualLogicalHeight)
         return true;
 
-    double density = (c->config.virtualDensity == 2.0) ? 2.0 : 1.0;
-    uint8_t vdMsg[512];
-    size_t vdLen = 0;
-    if (!appleRfbBuildVirtualDisplayMessage(c->activeVirtualDisplays,
-                                            width, height, density,
-                                            3840, 2160, 60.0, false,
-                                            vdMsg, sizeof(vdMsg), &vdLen)) {
+    if (!sendVirtualDisplayConfig(c, width, height))
         return false;
-    }
     c->virtualLogicalWidth = width;
     c->virtualLogicalHeight = height;
-    return streamWrite(c, vdMsg, vdLen);
+    return true;
 }
 
 bool appleRfbRefreshFramebuffer(AppleRfbClient *c) {

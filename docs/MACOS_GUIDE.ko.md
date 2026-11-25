@@ -40,6 +40,8 @@
 - macOS `screensharingd`는 **하나의 데스크톱 세션(창 포커스, 입력 프롬프트, 커서)**을 공유합니다.
 - 어느 모니터 1개를 표시할지(`디스플레이 1`~`디스플레이 6`)는 **클라이언트마다 독립적으로 선택**할 수 있습니다.
 - 양쪽 클라이언트 모두 같은 디스플레이(예: 둘 다 `디스플레이 1`)를 선택하면 실시간으로 동일한 화면을 보게 됩니다.
+- 가상 디스플레이 구성은 Mac 전체에 하나뿐이라 모든 접속이 공유합니다. 그래서 AVNC는 다른 접속이 이미 가상 디스플레이를 쓰고 있으면 `고성능` 프로필이라도 가상 디스플레이를 만들거나 크기를 바꾸지 않고, 있는 디스플레이 중 하나를 선택해 보기만 합니다. AVNC가 먼저 만든 뒤 다른 접속이 구성을 바꾼 경우에도 그때부터 크기 조절을 멈춥니다.
+- 한계: 가상 디스플레이를 쓰지 않는(표준 모드) 다른 접속이 있는지는 서버가 알려 주지 않습니다. 그런 접속이 있을 때 `고성능` 프로필로 접속하면 Mac의 디스플레이 구성이 바뀝니다. 다른 접속과 함께 쓸 때는 `표준` 프로필이 안전합니다.
 
 ### 아키텍처 및 프로토콜 구현 (`AppleRfb.h` / `AppleRfb.cpp`)
 - **비파괴 프로토콜 감지**: 소켓 연결 직후 `appleRfbPeekIsAppleBanner()`가 `MSG_PEEK`로 배너 12바이트를 확인해 `RFB 003.889\n`(또는 `003.888\n`)이면 네이티브 `AppleRfbClient`로 진입하고, 일반 VNC 서버나 VncAuth 전용 서버는 기존 LibVNCClient 경로로 매끄럽게 폴백합니다.
@@ -47,7 +49,7 @@
   - OpenSSL 3 / LibreSSL 기반으로 **Apple SRP(36)**, **RSA-SRP / RSA1-Plain(33)**, **Apple DH(30)** 인증을 C++ STL 없이(`-DANDROID_STL=none`) 구현했습니다.
   - `ViewerInfo(0x21)` → `SetMode(0x0a)` → `AutoPasteboard(0x15)` → `SetEncryption(0x12)` → `1103(0x44f) Rekey` 교환으로 AES-128-CBC + SHA-1 시퀀스 검증 레코드 계층을 활성화합니다.
 - **단일 가상 디스플레이 & 최대 6개 중 단일 선택**:
-  - `가상 디스플레이 1개` 선택 시 `SetEncodings` 이전에 `0x1d`(`SetDisplayConfiguration`, `display_count = 1`)를 전송합니다.
+  - `가상 디스플레이 1개` 선택 시, 첫 `1105 DisplayLayout`에 가상 디스플레이가 없을 때만 `0x1d`(`SetDisplayConfiguration`, `display_count = 1`)를 전송합니다.
   - 서버의 `1105(0x451) DisplayLayout`을 파싱해 최대 6개 디스플레이 목록·해상도·`scale`을 갱신하고, 프로필의 `initialDisplayIndex`(`1..6`, 범위 외는 `1`로 폴백)를 `0x0d`(`SetDisplay`)로 자동 선택해 항상 단일 모니터만 표시합니다.
 - **DB 마이그레이션**: Room `MainDb`를 스키마 `v7 → v8`([`8.json`](../app/roomSchema/com.gaurav.avnc.model.db.MainDb/8.json))로 마이그레이션해 `appleDisplayMode`, `appleInitialDisplay` 컬럼(기본값 `0`)을 추가했습니다.
 

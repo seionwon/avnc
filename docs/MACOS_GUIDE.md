@@ -47,7 +47,7 @@ When two VNC clients connect to the same macOS host at once:
   - Supports Apple **Direct SRP (36)**, **RSA-SRP / RSA1-Plain (33)**, and **Apple DH (30)** (plus NoAuth `1` for local mock testing), built with OpenSSL 3 / LibreSSL and zero C++ STL (`-DANDROID_STL=none`).
   - Negotiates `ViewerInfo (0x21)`, `SetMode (0x0a)`, `AutoPasteboard (0x15)`, `SetEncryption (0x12)`, and `1103 (0x44f) Rekey` to establish Apple's AES-128-CBC + SHA-1 sequence-tagged record layer.
 - **Single Virtual Display & Up-to-6 Display Selection**:
-  - Sends `0x1d` (`SetDisplayConfiguration`, `display_count = 1`) before `SetEncodings` when `1 Virtual Display` is requested.
+  - Sends `0x1d` (`SetDisplayConfiguration`, `display_count = 1`) when `1 Virtual Display` is requested, but only after the first `1105 DisplayLayout` shows no virtual display in use. Virtual displays are one configuration shared by every viewer, so if another viewer already has them AVNC joins without creating or resizing anything, and it stops resizing if another viewer later replaces the configuration. A viewer in standard mode cannot be detected; use the `Standard` profile when sharing the Mac with one.
   - Parses server `1105 (0x451) DisplayLayout` rectangles (framebuffer size, active `currentDisplayId`, logical/backing bounds, density, `scale`, and display flags), exposes up to **6 selectable displays**, and automatically selects the configured single display (`1..6`, falling back to `Display 1`) via `0x0d` (`SetDisplay`).
 - **Database Migration**: Room `MainDb` migrated from schema `v7` → `v8` ([`8.json`](../app/roomSchema/com.gaurav.avnc.model.db.MainDb/8.json)) adding `appleDisplayMode` and `appleInitialDisplay` with default `0`.
 

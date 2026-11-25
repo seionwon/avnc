@@ -66,7 +66,7 @@
     <string name="title_display_6">Display 6</string>
     <string name="title_display_numbered">Display %1$d</string>
     <string name="title_display_numbered_with_size">Display %1$d (%2$d×%3$d)</string>
-    <string name="msg_apple_display_mode_help">For macOS built-in Screen Sharing (using macOS username &amp; password):\n\n• <b>Standard</b>: Connects to one of the Mac\'s physical monitors (supports up to 6 displays).\n• <b>High Performance: 1 Virtual Display</b>: Creates a single virtual display on Apple Silicon Macs (macOS Sonoma+).\n\nChoose an <b>Initial display</b> (Display 1–6) or switch between single displays (1–6) live from the viewer toolbar.</string>
+    <string name="msg_apple_display_mode_help">For macOS built-in Screen Sharing (using macOS username &amp; password):\n\n• <b>Standard</b>: Connects to one of the Mac\'s physical monitors (supports up to 6 displays).\n• <b>High Performance: 1 Virtual Display</b>: Creates a single virtual display on Apple Silicon Macs (macOS Sonoma+). If another viewer is already using virtual displays, AVNC joins them as they are and does not create or resize anything.\n\nChoose an <b>Initial display</b> (Display 1–6) or switch between single displays (1–6) live from the viewer toolbar.</string>
     <string name="title_image_quality_raw">Raw</string>
     <string name="title_vnc_security">Security</string>
     <string name="title_use_ssh_tunnel">Use SSH tunnel</string>
