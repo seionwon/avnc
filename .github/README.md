@@ -1,9 +1,9 @@
 # AVNC Android 릴리스 · seionwon/avnc
 
 <!-- release-notes:start -->
-**[Android APK 다운로드 / Download APK](https://github.com/seionwon/avnc/raw/refs/heads/master/downloads/AVNC-v3.3.11-seionwon.apk)** · 9.7 MiB
+**[Android APK 다운로드 / Download APK](https://github.com/seionwon/avnc/raw/refs/heads/master/downloads/AVNC-v3.3.12-seionwon.apk)** · 9.7 MiB
 
-**3.3.11-seionwon** · Android 5.0 이상 · 디버그 빌드 (Debug)
+**3.3.12-seionwon** · Android 5.0 이상 · 디버그 빌드 (Debug)
 
 한 APK에 ARM64와 ARMv7 버전이 함께 들어 있습니다.
 <!-- release-notes:end -->

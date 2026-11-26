@@ -17,8 +17,8 @@ android {
         applicationId = "com.gaurav.avnc"
         minSdk = 21
         targetSdk = 36
-        versionCode = 63
-        versionName = "3.3.11-seionwon"
+        versionCode = 64
+        versionName = "3.3.12-seionwon"
 
         javaCompileOptions {
             annotationProcessorOptions {

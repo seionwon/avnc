@@ -8,6 +8,7 @@
 
 #include "AppleRfb.h"
 #include "FramebufferLimits.h"
+#include "AesCbcDecrypt.h"
 
 #include <errno.h>
 #include <math.h>
@@ -420,6 +421,9 @@ struct AppleRfbClient {
 
     bool recordReadActive;
     EVP_CIPHER_CTX *decCtx;
+    // Incoming records use the CPU's AES instructions when it has them (decCtx stays null then).
+    bool hardwareDecrypt;
+    AesCbcDecryptor hardwareDec;
     uint32_t readSeq;
     uint8_t *readPlainBuf;
     size_t readPlainPos;
@@ -723,8 +727,10 @@ static bool readNextRecord(AppleRfbClient *c) {
         return false;
 
     int outLen = 0;
-    if (EVP_DecryptUpdate(c->decCtx, c->readPlainBuf, &outLen, c->readPlainBuf, size) != 1 ||
-        outLen != size) {
+    if (c->hardwareDecrypt) {
+        aesCbcDecrypt(&c->hardwareDec, c->readPlainBuf, size);
+    } else if (EVP_DecryptUpdate(c->decCtx, c->readPlainBuf, &outLen, c->readPlainBuf, size) != 1 ||
+               outLen != size) {
         logErr(c, "AppleRfb: record decrypt failed");
         c->lastErrno = EPROTO;
         return false;
@@ -2254,12 +2260,18 @@ static bool handleRekey(AppleRfbClient *c) {
     memcpy(c->nextIv, iv, 16);
 
     if (c->decCtx) EVP_CIPHER_CTX_free(c->decCtx);
-    c->decCtx = EVP_CIPHER_CTX_new();
-    if (!c->decCtx ||
-        EVP_DecryptInit_ex(c->decCtx, EVP_aes_128_cbc(), nullptr, key, iv) != 1 ||
-        EVP_CIPHER_CTX_set_padding(c->decCtx, 0) != 1) {
-        c->lastErrno = EIO;
-        return false;
+    c->decCtx = nullptr;
+    c->hardwareDecrypt = aesCbcHardwareAvailable();
+    if (c->hardwareDecrypt) {
+        aesCbcDecryptInit(&c->hardwareDec, key, iv);
+    } else {
+        c->decCtx = EVP_CIPHER_CTX_new();
+        if (!c->decCtx ||
+            EVP_DecryptInit_ex(c->decCtx, EVP_aes_128_cbc(), nullptr, key, iv) != 1 ||
+            EVP_CIPHER_CTX_set_padding(c->decCtx, 0) != 1) {
+            c->lastErrno = EIO;
+            return false;
+        }
     }
     c->recordReadActive = true;
     c->readPlainPos = 0;
